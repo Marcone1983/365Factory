@@ -1,0 +1,17 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    "no-console": ["error", { "allow": ["warn", "error"] }],
+    "eqeqeq": ["error", "always"],
+    "no-var": "error",
+    "prefer-const": "error",
+    "@next/next/no-img-element": "off"
+  },
+  "ignorePatterns": [
+    "node_modules/",
+    ".next/",
+    "workspaces/",
+    "var/",
+    "src/generation/templates/**"
+  ]
+}

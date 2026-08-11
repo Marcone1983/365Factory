@@ -1,0 +1,25 @@
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# Runtime state (databases, caches, logs, keystores)
+var/
+workspaces/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+*.keystore
+*.jks
+*.p12
+*.pem
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+coverage/

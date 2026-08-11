@@ -1,0 +1,273 @@
+import * as THREE from 'three';
+import {
+  Engine,
+  InputSystem,
+  MaterialLibrary,
+  ParticleSystem,
+  CharacterController,
+  SpatialHash,
+  UiLayer,
+  SaveStore,
+  Progression,
+  generateHeightfield,
+  buildTerrainMesh,
+  buildSky,
+  scatterInstances,
+  createFacetedGeometry,
+  createFoliageGeometry,
+  sphereOverlap,
+  type Collider,
+  type FrameContext,
+  type Heightfield,
+  type System,
+} from './engine';
+import { BRAND, SEED } from './brand';
+
+/**
+ * Reference product used by the platform's own integration tests.
+ *
+ * It exercises every part of the runtime contract the coding agent must satisfy:
+ * world construction, a character controller, collectible interaction, HUD,
+ * persistence and the `window.__adafGame` inspection hook.
+ */
+
+interface SaveData extends Record<string, unknown> {
+  collected: string[];
+  level: number;
+  xp: number;
+}
+
+class WorldSystem implements System {
+  readonly name = 'world';
+  field!: Heightfield;
+  readonly colliders: Collider[] = [];
+  readonly hash = new SpatialHash(10);
+  private readonly materials = new MaterialLibrary();
+  private sky: { dispose(): void } | null = null;
+
+  init(app: Engine): void {
+    this.field = generateHeightfield({
+      size: 240,
+      segments: 128,
+      seed: SEED,
+      amplitude: 26,
+      frequency: 3.2,
+      octaves: 5,
+      spawnFlatRadius: 16,
+    });
+
+    const terrain = buildTerrainMesh(this.field, {
+      bands: [
+        { at: 0, color: 0x2c4c3b },
+        { at: 0.4, color: 0x4c7a4a },
+        { at: 0.75, color: 0x8a7f63 },
+        { at: 1, color: 0xd8d8e2 },
+      ],
+      slopeColor: 0x5b5346,
+    });
+    app.scene.add(terrain);
+
+    this.sky = buildSky(
+      app.scene,
+      {
+        topColor: 0x2f5a95,
+        horizonColor: 0xa8c4dd,
+        sunColor: 0xfff0d0,
+        sunElevation: 34,
+        sunAzimuth: 128,
+        fogDensity: 0.0035,
+      },
+      app.profile.shadowMapSize,
+      app.profile.viewDistance,
+    );
+
+    const rockGeometry = createFacetedGeometry(1.6, 1, SEED + 11, 0.4);
+    const rocks = scatterInstances(rockGeometry, this.materials.surface('rock', { color: 0x8a8577, roughness: 0.95 }), this.field, {
+      count: 90,
+      seed: SEED + 3,
+      area: 210,
+      maxSlope: 0.7,
+      exclusionRadius: 14,
+    });
+    app.scene.add(rocks);
+
+    const treeGeometry = createFoliageGeometry(6.5, SEED + 29);
+    const trees = scatterInstances(treeGeometry, this.materials.surface('foliage', { color: 0x3f6d3a, roughness: 0.9 }), this.field, {
+      count: 140,
+      seed: SEED + 7,
+      area: 200,
+      maxSlope: 0.35,
+      exclusionRadius: 18,
+    });
+    app.scene.add(trees);
+  }
+
+  dispose(): void {
+    this.materials.dispose();
+    this.sky?.dispose();
+  }
+}
+
+class PlaySystem implements System {
+  readonly name = 'play';
+  readonly controller = new CharacterController({ walkSpeed: 6.2, jumpVelocity: 6.8 });
+  readonly progression = new Progression();
+  collected = new Set<string>();
+  state: 'playing' | 'paused' = 'playing';
+
+  private world!: WorldSystem;
+  private input!: InputSystem;
+  private ui!: UiLayer;
+  private particles!: ParticleSystem;
+  private readonly pickups: Array<{ collider: Collider; mesh: THREE.Mesh }> = [];
+  private readonly store = new SaveStore<SaveData>('reference-game', 1, { collected: [], level: 1, xp: 0 });
+  private avatar!: THREE.Mesh;
+  /** Set through the runtime contract so automated tests can drive movement. */
+  private forcedForward = false;
+  private readonly moveVector = new THREE.Vector2();
+
+  init(app: Engine): void {
+    this.world = app.get<WorldSystem>('world') as WorldSystem;
+    this.input = app.get<InputSystem>('input') as InputSystem;
+    this.ui = new UiLayer(app.container, {
+      accent: BRAND.accent,
+      surface: 'rgba(10,14,24,.86)',
+      text: BRAND.text,
+      muted: 'rgba(242,245,251,.62)',
+      danger: '#ff5c6c',
+      radius: '14px',
+      fontFamily: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    });
+
+    this.particles = new ParticleSystem(app.profile.particleBudget);
+    app.scene.add(this.particles.points);
+
+    this.avatar = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.42, 0.9, 4, 8),
+      new THREE.MeshStandardMaterial({ color: new THREE.Color(BRAND.primary), roughness: 0.6 }),
+    );
+    this.avatar.castShadow = true;
+    app.scene.add(this.avatar);
+
+    this.controller.position.set(0, this.world.field.heightAt(0, 0) + 1, 0);
+
+    const pickupGeometry = createFacetedGeometry(0.42, 1, SEED + 91, 0.15);
+    const pickupMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(BRAND.accent),
+      emissive: new THREE.Color(BRAND.accent),
+      emissiveIntensity: 0.7,
+      roughness: 0.35,
+    });
+    for (let i = 0; i < 12; i += 1) {
+      const angle = (i / 12) * Math.PI * 2;
+      const radius = 26 + (i % 4) * 12;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const y = this.world.field.heightAt(x, z) + 1.1;
+      const mesh = new THREE.Mesh(pickupGeometry, pickupMaterial);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      app.scene.add(mesh);
+      const collider: Collider = { id: `pickup_${i}`, position: mesh.position, radius: 1.1, height: 0, solid: false, tag: 'pickup' };
+      this.pickups.push({ collider, mesh });
+      this.world.colliders.push(collider);
+    }
+    this.world.hash.rebuild(this.world.colliders);
+
+    this.ui.setChip({ id: 'score', label: 'Shards', value: '0 / 12' });
+    this.ui.setChip({ id: 'level', label: 'Level', value: '1', progress: 0 }, 'right');
+    this.restore();
+    this.exposeContract();
+  }
+
+  update(ctx: FrameContext): void {
+    if (this.state !== 'playing') return;
+    this.controller.yaw -= this.input.look.x;
+    this.controller.pitch = Math.max(-0.6, Math.min(0.6, this.controller.pitch + this.input.look.y));
+    if (this.input.wasPressed('jump')) this.controller.queueJump();
+
+    this.moveVector.copy(this.input.move);
+    if (this.forcedForward) this.moveVector.set(0, 1);
+    this.controller.update(ctx.dt, this.moveVector, this.input.isHeld('sprint'), this.world.field, this.world.colliders);
+    this.avatar.position.copy(this.controller.position).setY(this.controller.position.y + 0.9);
+    this.avatar.rotation.y = this.controller.yaw;
+    this.controller.applyThirdPersonCamera(ctx.app.camera, this.world.field);
+
+    for (const pickup of this.pickups) {
+      if (this.collected.has(pickup.collider.id) || !pickup.mesh.visible) continue;
+      pickup.mesh.rotation.y += ctx.dt * 1.6;
+      if (sphereOverlap(this.controller.position, 1.1, pickup.collider.position, pickup.collider.radius)) {
+        pickup.mesh.visible = false;
+        this.collected.add(pickup.collider.id);
+        this.progression.award(45);
+        this.particles.burst({
+          origin: pickup.mesh.position.clone(),
+          count: 26,
+          speed: 4.2,
+          spread: 1.2,
+          life: 0.9,
+          size: 3.2,
+          color: new THREE.Color(BRAND.accent).getHex(),
+        });
+        this.ui.setChip({ id: 'score', label: 'Shards', value: `${this.collected.size} / ${this.pickups.length}` });
+        this.ui.setChip(
+          { id: 'level', label: 'Level', value: String(this.progression.level), progress: this.progression.xp / this.progression.xpForLevel(this.progression.level) },
+          'right',
+        );
+        this.ui.toast('Shard recovered');
+      }
+    }
+
+    this.particles.update(ctx.dt);
+    this.input.endFrame();
+  }
+
+  dispose(): void {
+    this.particles.dispose();
+    this.ui.dispose();
+  }
+
+  private restore(): void {
+    const data = this.store.load();
+    this.collected = new Set(data.collected);
+    this.progression.restore({ level: data.level, xp: data.xp });
+    for (const pickup of this.pickups) {
+      if (this.collected.has(pickup.collider.id)) pickup.mesh.visible = false;
+    }
+    this.ui.setChip({ id: 'score', label: 'Shards', value: `${this.collected.size} / ${this.pickups.length}` });
+  }
+
+  private exposeContract(): void {
+    const api = {
+      snapshot: () => ({
+        scene: 'valley',
+        entities: this.pickups.length,
+        player: { x: this.controller.position.x, y: this.controller.position.y, z: this.controller.position.z },
+        state: this.state,
+        score: this.collected.size,
+      }),
+      input: (action: string, down: boolean) => {
+        if (action === 'jump' && down) this.controller.queueJump();
+        if (action === 'forward') this.forcedForward = down;
+      },
+      save: () => this.store.save({ collected: [...this.collected], level: this.progression.level, xp: this.progression.xp }),
+      load: () => {
+        this.restore();
+        return true;
+      },
+    };
+    (window as unknown as { __adafGame: typeof api }).__adafGame = api;
+  }
+
+}
+
+async function main(): Promise<void> {
+  const canvas = document.getElementById('stage') as HTMLCanvasElement | null;
+  const engine = new Engine({ canvas: canvas ?? undefined, container: document.body, clearColor: Number.parseInt(BRAND.background.slice(1), 16) });
+  engine.add(new InputSystem()).add(new WorldSystem()).add(new PlaySystem());
+  await engine.start();
+  const boot = document.getElementById('boot');
+  if (boot) boot.classList.add('is-done');
+}
+
+void main();
