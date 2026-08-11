@@ -90,7 +90,26 @@ export class OpenAiCompatibleProvider implements LLMProvider {
     const model = req.model ?? this.modelFor(req.tier ?? 'balanced');
     const messages: Array<Record<string, unknown>> = [];
     if (req.system) messages.push({ role: 'system', content: req.system });
-    for (const m of req.messages) messages.push({ role: m.role, content: m.content });
+    for (const m of req.messages) {
+      if (m.images && m.images.length > 0) {
+        // OpenAI-compatible endpoints take images as data URLs in a parts array.
+        messages.push({
+          role: m.role,
+          content: [
+            ...m.images.flatMap((image) => [
+              ...(image.caption ? [{ type: 'text', text: image.caption }] : []),
+              {
+                type: 'image_url',
+                image_url: { url: `data:${image.mimeType};base64,${image.data.toString('base64')}` },
+              },
+            ]),
+            { type: 'text', text: m.content },
+          ],
+        });
+      } else {
+        messages.push({ role: m.role, content: m.content });
+      }
+    }
 
     const body: Record<string, unknown> = {
       model,

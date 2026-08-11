@@ -35,6 +35,8 @@ export type TaskName =
   | 'code_repair'
   | 'test_authoring'
   | 'asset_briefing'
+  | 'asset_recipe'
+  | 'asset_review'
   | 'security_review'
   | 'performance_review'
   | 'knowledge_summary'
@@ -67,6 +69,14 @@ export const TASK_POLICIES: Record<TaskName, TaskPolicy> = {
   code_repair: { tier: 'deep', maxOutputTokens: 12_000, temperature: 0.1, cacheTtlSeconds: 0, semanticCache: false, description: 'Fix a build, type or test failure.' },
   test_authoring: { tier: 'balanced', maxOutputTokens: 6000, temperature: 0.2, cacheTtlSeconds: 0, semanticCache: false, description: 'Author automated tests for generated code.' },
   asset_briefing: { tier: 'fast', maxOutputTokens: 2500, temperature: 0.8, cacheTtlSeconds: 0, semanticCache: false, description: 'Turn a concept into concrete art direction and asset briefs.' },
+  // Writing a recipe is deep work: the brief alone runs to thousands of
+  // characters before a single coordinate, and the geometry that follows is
+  // long. Temperature is moderate — invention in the design, precision in the
+  // numbers.
+  asset_recipe: { tier: 'deep', maxOutputTokens: 16_000, temperature: 0.55, cacheTtlSeconds: 0, semanticCache: false, description: 'Write a full modelling recipe for a requested 3D asset.' },
+  // Reviewing renders is a judgement call made against fixed criteria, so it
+  // runs cold. It is never cached: the whole point is to look at this asset.
+  asset_review: { tier: 'balanced', maxOutputTokens: 5000, temperature: 0.05, cacheTtlSeconds: 0, semanticCache: false, description: 'Grade rendered asset views against the brief that specified them.' },
   security_review: { tier: 'balanced', maxOutputTokens: 4000, temperature: 0.1, cacheTtlSeconds: 0, semanticCache: false, description: 'Review generated code for security defects.' },
   performance_review: { tier: 'balanced', maxOutputTokens: 3000, temperature: 0.2, cacheTtlSeconds: 0, semanticCache: false, description: 'Interpret runtime metrics and propose optimisations.' },
   knowledge_summary: { tier: 'fast', maxOutputTokens: 1500, temperature: 0.3, cacheTtlSeconds: 0, semanticCache: false, description: 'Condense a run outcome into reusable knowledge.' },

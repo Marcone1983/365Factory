@@ -44,9 +44,26 @@ export class ProviderRequestError extends Error {
 
 export type LLMRole = 'user' | 'assistant';
 
+/**
+ * An image attached to a message.
+ *
+ * Vision is not a convenience here: it is what lets the platform look at what
+ * it produced. A generated asset can only be judged against its brief by
+ * someone — or something — that can see the render.
+ */
+export interface LLMImage {
+  /** Raw image bytes; encoded per provider at the call site. */
+  readonly data: Buffer;
+  readonly mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  /** Shown before the image, so the model knows what it is looking at. */
+  readonly caption?: string;
+}
+
 export interface LLMMessage {
   readonly role: LLMRole;
   readonly content: string;
+  /** Images accompanying this message. Ignored by providers without vision. */
+  readonly images?: readonly LLMImage[];
 }
 
 export interface LLMToolDefinition {

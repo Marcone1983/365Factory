@@ -86,7 +86,26 @@ export class AnthropicProvider implements LLMProvider {
     const body: Record<string, unknown> = {
       model,
       max_tokens: req.maxOutputTokens,
-      messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
+      // A message with images becomes a content-block array; one without stays
+      // a plain string, which keeps the request identical to before for the
+      // overwhelming majority of calls.
+      messages: req.messages.map((m) =>
+        m.images && m.images.length > 0
+          ? {
+              role: m.role,
+              content: [
+                ...m.images.flatMap((image) => [
+                  ...(image.caption ? [{ type: 'text', text: image.caption }] : []),
+                  {
+                    type: 'image',
+                    source: { type: 'base64', media_type: image.mimeType, data: image.data.toString('base64') },
+                  },
+                ]),
+                { type: 'text', text: m.content },
+              ],
+            }
+          : { role: m.role, content: m.content },
+      ),
     };
     if (system) body.system = system;
     if (req.temperature !== undefined) body.temperature = req.temperature;
