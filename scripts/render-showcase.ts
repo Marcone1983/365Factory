@@ -5,6 +5,8 @@ import { chromium } from 'playwright-core';
 import { findBrowserExecutable } from '../src/lib/qa/browser';
 import { generateModel, type ModelKind } from '../src/lib/generation/models/catalog';
 import { inspectGlb } from '../src/lib/graphics/gltf';
+import { buildAssetFromRecipe } from '../src/lib/generation/recipe/build';
+import { RECIPE_EXAMPLES } from '../src/lib/generation/recipe/examples';
 
 /**
  * Renders generated models so their quality can be judged by looking at them.
@@ -261,10 +263,45 @@ async function main(): Promise<void> {
   fs.mkdirSync(glbDir, { recursive: true });
 
   // Generate first, so the server can serve real files.
-  const subjects = ONLY ? SUBJECTS.filter((s) => s.name === ONLY || s.kind === ONLY) : SUBJECTS;
-  if (subjects.length === 0) throw new Error(`no subject matches "${ONLY ?? ''}"`);
+  const subjects = ONLY === 'recipes' ? [] : ONLY ? SUBJECTS.filter((s) => s.name === ONLY || s.kind === ONLY) : SUBJECTS;
+  if (subjects.length === 0 && ONLY !== 'recipes') throw new Error(`no subject matches "${ONLY ?? ''}"`);
 
   const generated: Array<{ subject: Subject; file: string; stats: Record<string, unknown> }> = [];
+
+  // Recipes render alongside the hand-written generators, because the whole
+  // point is that they are the same kind of asset by the time they reach a game.
+  if (!ONLY || ONLY === 'recipes') {
+    for (const example of RECIPE_EXAMPLES) {
+      process.stdout.write(`building recipe "${example.recipe.name}"…\n`);
+      const built = buildAssetFromRecipe(example.recipe, {
+        palette: ['#c9a227', '#2b2f36', '#dfe7f5', '#ffd88a'],
+        seed: 4242,
+        textureSize: 1024,
+      });
+      const file = path.join(glbDir, `${built.name}.glb`);
+      fs.writeFileSync(file, built.glb);
+      process.stdout.write(
+        `  ${(built.glb.length / 1024 / 1024).toFixed(2)} MB · ${built.triangleCount} triangles · ` +
+          `${built.materialCount} materials · ${built.textureCount} textures · ${built.stats.steps} steps in ${built.stats.durationMs}ms\n`,
+      );
+      generated.push({
+        subject: {
+          kind: 'character',
+          name: built.name,
+          seed: 0,
+          palette: [],
+          shots: [
+            [30, 10, 1.0, 'three-quarter'],
+            [90, 6, 1.0, 'side'],
+            [25, 22, 0.55, 'detail'],
+          ],
+        },
+        file,
+        stats: { bytes: built.glb.length, triangles: built.triangleCount, warnings: built.warnings },
+      });
+    }
+  }
+
   for (const subject of subjects) {
     process.stdout.write(`generating ${subject.kind} "${subject.name}"…\n`);
     const started = Date.now();
