@@ -9,6 +9,7 @@ import { readPngInfo } from '@/lib/graphics/png';
 import { coverResizePng, resizePng, roundedMaskPng } from '@/lib/graphics/image-ops';
 import { inspectGlb, writeGlb } from '@/lib/graphics/gltf';
 import { generateMesh, type MeshArchetype } from './meshes';
+import { generateModel, type ModelKind } from './models/catalog';
 import { createLogger } from '@/lib/observability/logger';
 import { emitEvent } from '@/lib/observability/events';
 import type { BrandIdentity } from './scaffold';
@@ -320,12 +321,35 @@ export async function generateTextures(
 
 // ------------------------------------------------------------------ meshes --
 
+/** High-fidelity model classes routed to the subdivision-surface generators. */
+const HIGH_FIDELITY: Readonly<Record<string, ModelKind>> = {
+  character: 'character',
+  creature: 'character',
+  avatar: 'character',
+  vehicle: 'vehicle',
+  car: 'vehicle',
+  track: 'track',
+  circuit: 'track',
+  weapon: 'weapon',
+};
+
 export interface MeshBrief {
   readonly name: string;
-  readonly archetype: MeshArchetype;
+  readonly archetype: MeshArchetype | ModelKind | 'avatar' | 'car' | 'circuit';
   readonly complexity?: number;
+  /** Passed through to the specialised generator (vehicle class, track style…). */
+  readonly params?: Record<string, unknown>;
 }
 
+/**
+ * Generates 3D assets.
+ *
+ * Characters, vehicles, tracks and weapons go through the subdivision-surface
+ * generators, which produce smooth, PBR-textured, rigged models. Set dressing
+ * (rocks, flora, generic props) uses the lightweight parametric path, where
+ * faceted geometry is the correct artistic choice and the triangle budget
+ * matters more than silhouette fidelity.
+ */
 export async function generateMeshAssets(
   project: Project,
   briefs: readonly MeshBrief[],
@@ -337,21 +361,75 @@ export async function generateMeshAssets(
   const out: AssetRecord[] = [];
 
   for (const brief of briefs) {
-    const mesh = generateMesh({
-      archetype: brief.archetype,
-      name: slug(brief.name) || brief.archetype,
-      seed: (seed ^ seedFrom(`${brief.archetype}:${brief.name}`)) >>> 0,
-      complexity: brief.complexity,
-      palette,
-    });
-    const glb = writeGlb({
-      generator: 'Autonomous Daily App Factory parametric mesh synthesiser',
-      primitives: mesh.primitives,
-      materials: mesh.materials,
-    });
-    const relativePath = `meshes/${slug(brief.name) || brief.archetype}.glb`;
-    assets.write(relativePath, glb);
+    const name = slug(brief.name) || String(brief.archetype);
+    const modelSeed = (seed ^ seedFrom(`${brief.archetype}:${brief.name}`)) >>> 0;
+    const relativePath = `meshes/${name}.glb`;
+    const highFidelity = HIGH_FIDELITY[brief.archetype as string];
 
+    let glb: Buffer;
+    let generator: string;
+    let validation: Record<string, unknown>;
+
+    if (highFidelity) {
+      const model = generateModel({
+        kind: highFidelity,
+        name,
+        seed: modelSeed,
+        palette,
+        smoothness: brief.complexity !== undefined ? Math.round(brief.complexity * 2) : undefined,
+        character: highFidelity === 'character' ? (brief.params as never) : undefined,
+        vehicle: highFidelity === 'vehicle' ? (brief.params as never) : undefined,
+        track: highFidelity === 'track' ? (brief.params as never) : undefined,
+        weapon: highFidelity === 'weapon' ? (brief.params as never) : undefined,
+      });
+      glb = model.glb;
+      generator = `subdivision:${highFidelity}`;
+      validation = {
+        ...inspectGlb(glb),
+        modelKind: highFidelity,
+        warnings: model.warnings,
+        textures: model.textureCount,
+      };
+      // Gameplay data (track layout, vehicle dimensions, rig joints) travels with
+      // the mesh so the coding agent can consume it without parsing geometry.
+      if (model.gameplay) {
+        const dataPath = `meshes/${name}.json`;
+        const payload = Buffer.from(JSON.stringify(model.gameplay, null, 2), 'utf8');
+        assets.write(dataPath, payload);
+        out.push(
+          persist(project, {
+            kind: 'model_data',
+            name: `${brief.name} data`,
+            path: dataPath,
+            mime: 'application/json',
+            width: 0,
+            height: 0,
+            bytes: payload.length,
+            sha256: crypto.createHash('sha256').update(payload).digest('hex'),
+            generator,
+            validated: true,
+            validation: { keys: Object.keys(model.gameplay) },
+          }),
+        );
+      }
+    } else {
+      const mesh = generateMesh({
+        archetype: brief.archetype as MeshArchetype,
+        name,
+        seed: modelSeed,
+        complexity: brief.complexity,
+        palette,
+      });
+      glb = writeGlb({
+        generator: 'Autonomous Daily App Factory parametric mesh synthesiser',
+        meshes: [{ name, primitives: mesh.primitives }],
+        materials: mesh.materials,
+      });
+      generator = `parametric:${brief.archetype}`;
+      validation = { ...inspectGlb(glb), archetype: brief.archetype };
+    }
+
+    assets.write(relativePath, glb);
     const summary = inspectGlb(glb);
     out.push(
       persist(project, {
@@ -363,9 +441,9 @@ export async function generateMeshAssets(
         height: 0,
         bytes: glb.length,
         sha256: crypto.createHash('sha256').update(glb).digest('hex'),
-        generator: `parametric:${brief.archetype}`,
+        generator,
         validated: summary.meshes > 0 && summary.triangles > 0,
-        validation: { ...summary, archetype: brief.archetype },
+        validation,
       }),
     );
   }
