@@ -86,10 +86,17 @@ beforeAll(async () => {
     BOOTSTRAP_ADMIN_PASSWORD: ADMIN_PASSWORD,
   };
 
-  server = spawn('npx', ['next', 'start', '-p', String(port)], { env, cwd: process.cwd(), stdio: 'pipe' });
+  // The child gets an explicitly built environment; the cast is needed because
+  // the Node typings insist ProcessEnv always carries NODE_ENV.
+  const child = spawn('npx', ['next', 'start', '-p', String(port)], {
+    env: env as NodeJS.ProcessEnv,
+    cwd: process.cwd(),
+    stdio: 'pipe',
+  });
+  server = child;
   let serverLog = '';
-  server.stdout?.on('data', (chunk: Buffer) => (serverLog += chunk.toString()));
-  server.stderr?.on('data', (chunk: Buffer) => (serverLog += chunk.toString()));
+  child.stdout?.on('data', (chunk: Buffer) => (serverLog += chunk.toString()));
+  child.stderr?.on('data', (chunk: Buffer) => (serverLog += chunk.toString()));
 
   if (!(await waitForServer(baseUrl, 90_000))) {
     skipReason = `the console server did not start within 90s:\n${serverLog.slice(-2000)}`;

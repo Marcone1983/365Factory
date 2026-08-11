@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  verify:
+    name: Typecheck, lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # The production build has to come before the tests: the console
+      # end-to-end suite serves the real build rather than a dev server, and
+      # skips itself loudly if there is no build to serve.
+      - name: Build
+        run: npm run build
+        env:
+          SESSION_SECRET: ci-placeholder-secret-not-used-at-runtime-000000
+
+      - name: Test
+        run: npm test
+        env:
+          SESSION_SECRET: ci-placeholder-secret-not-used-at-runtime-000000
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs
+          path: |
+            var/**/*.log
+            .next/build-manifest.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker:
+    name: Container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: verify
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built on every branch to catch a Dockerfile that has drifted from the
+      # application, but only loaded locally — publishing is a separate decision.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: app-factory:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify the image starts and serves
+        run: |
+          docker run -d --name factory-ci \
+            -p 3000:3000 \
+            -e SESSION_SECRET="$(openssl rand -hex 48)" \
+            app-factory:${{ github.sha }}
+
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/login > /dev/null; then
+              echo "console is serving"
+              docker rm -f factory-ci
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "the console did not start within 120s"
+          docker logs factory-ci
+          docker rm -f factory-ci
+          exit 1
