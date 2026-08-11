@@ -449,6 +449,10 @@ export async function generateMeshAssets(
         modelKind: highFidelity,
         warnings: model.warnings,
         textures: model.textureCount,
+        // Stored triangles govern download size; rendered triangles govern frame
+        // time. The coding agent needs the second to budget a scene, so both are
+        // recorded rather than one standing in for the other.
+        renderedTriangles: model.renderedTriangleCount,
       };
       // Gameplay data (track layout, vehicle dimensions, rig joints) travels with
       // the mesh so the coding agent can consume it without parsing geometry.

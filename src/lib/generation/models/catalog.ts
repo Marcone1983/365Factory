@@ -42,7 +42,18 @@ export interface GeneratedModel {
   readonly glb: Buffer;
   readonly kind: ModelKind;
   readonly name: string;
+  /**
+   * Triangles stored in the file. This is what determines download size and GPU
+   * memory, and it is the number a GLB inspector reports.
+   */
   readonly triangleCount: number;
+  /**
+   * Triangles submitted per frame with every node instance counted. A vehicle
+   * stores one wheel mesh and instances it at four nodes, so it draws
+   * substantially more than it stores; this is the number that governs frame
+   * time, and it is what the triangle budget is checked against.
+   */
+  readonly renderedTriangleCount: number;
   readonly textureCount: number;
   readonly materialCount: number;
   readonly warnings: readonly string[];
@@ -116,7 +127,8 @@ function extendPalette(palette: readonly string[], seed: number): string[] {
 
 interface BuiltGeometry {
   readonly input: Omit<GlbInput, 'materials' | 'textures' | 'generator'>;
-  readonly triangleCount: number;
+  /** Per-frame triangle count with node instancing counted; see GeneratedModel. */
+  readonly renderedTriangleCount: number;
   readonly gameplay?: Record<string, unknown>;
 }
 
@@ -126,7 +138,7 @@ function buildGeometry(request: ModelRequest): BuiltGeometry {
       const model = generateCharacter({ name: request.name, seed: request.seed, smoothness: request.smoothness, ...request.character });
       return {
         input: { meshes: model.meshes, nodes: model.nodes, skins: model.skins, animations: model.animations, roots: [0, 1] },
-        triangleCount: model.triangleCount,
+        renderedTriangleCount: model.triangleCount,
         gameplay: { joints: model.skeleton.joints.map((j) => j.name), animations: model.animations.map((a) => a.name) },
       };
     }
@@ -134,7 +146,7 @@ function buildGeometry(request: ModelRequest): BuiltGeometry {
       const model = generateVehicle({ name: request.name, seed: request.seed, smoothness: request.smoothness, ...request.vehicle });
       return {
         input: { meshes: model.meshes, nodes: model.nodes },
-        triangleCount: model.triangleCount,
+        renderedTriangleCount: model.triangleCount,
         gameplay: { dimensions: model.dimensions, vehicleClass: model.vehicleClass, wheelNodes: ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'] },
       };
     }
@@ -142,7 +154,7 @@ function buildGeometry(request: ModelRequest): BuiltGeometry {
       const model = generateTrack({ name: request.name, seed: request.seed, ...request.track });
       return {
         input: { meshes: model.meshes, nodes: model.nodes },
-        triangleCount: model.triangleCount,
+        renderedTriangleCount: model.triangleCount,
         gameplay: trackGameplayData(model),
       };
     }
@@ -151,7 +163,7 @@ function buildGeometry(request: ModelRequest): BuiltGeometry {
       const model = generateWeapon({ name: request.name, seed: request.seed, smoothness: request.smoothness, ...request.weapon });
       return {
         input: { meshes: model.meshes, nodes: model.nodes },
-        triangleCount: model.triangleCount,
+        renderedTriangleCount: model.triangleCount,
         gameplay: { family: model.family, muzzleOffset: model.muzzleOffset, gripOffset: model.gripOffset, overallLength: model.overallLength },
       };
     }
@@ -241,19 +253,31 @@ export function generateModel(request: ModelRequest): GeneratedModel {
     textures,
   });
 
-  const validation = validateGlb(glb, { maxTriangles: TRIANGLE_BUDGETS[request.kind], requireUvs: true });
-  if (!validation.ok) {
-    log.warn('generated model exceeded its budget or failed validation', { name: request.name, problems: validation.problems });
+  const validation = validateGlb(glb, { requireUvs: true });
+  const problems = [...validation.problems];
+
+  // The budget is a frame-time budget, so it is checked against the instanced
+  // count rather than the stored one. Checking the stored count would let a
+  // model that instances one mesh a hundred times pass while being unplayable.
+  const budget = TRIANGLE_BUDGETS[request.kind];
+  if (geometry.renderedTriangleCount > budget) {
+    problems.push(
+      `${geometry.renderedTriangleCount} rendered triangles exceeds the ${budget} budget for a ${request.kind}`,
+    );
+  }
+  if (problems.length > 0) {
+    log.warn('generated model exceeded its budget or failed validation', { name: request.name, problems });
   }
 
   return {
     glb,
     kind: request.kind,
     name: request.name,
-    triangleCount: geometry.triangleCount,
+    triangleCount: validation.summary?.triangles ?? 0,
+    renderedTriangleCount: geometry.renderedTriangleCount,
     textureCount: textures.length,
     materialCount: materials.length,
-    warnings: validation.problems,
+    warnings: problems,
     gameplay: geometry.gameplay,
   };
 }

@@ -104,10 +104,21 @@ function toMemory(row: ErrorMemoryRow): ErrorMemory {
 /**
  * Normalises an error into a stable signature.
  *
- * Absolute paths, line and column numbers, hashes, hex addresses, quoted
- * identifiers and numeric literals are all collapsed, because the *shape* of the
+ * Paths, line and column numbers, hashes, hex addresses, quoted identifiers,
+ * durations and numeric literals are all collapsed, because the *shape* of the
  * error is what recurs — "Property X does not exist on type Y" is the same
  * lesson whichever X and Y triggered it this time.
+ *
+ * Two details matter more than they look. Paths are collapsed whether they are
+ * absolute or relative, because compilers and bundlers report relative paths far
+ * more often than absolute ones, and a signature that still carries `src/a.ts`
+ * would file today's occurrence separately from yesterday's. Numbers are
+ * collapsed together with a trailing unit, because `failed after 1240ms` and
+ * `failed after 87ms` are one lesson and a bare `\d+` rule would not join them —
+ * there is no word boundary between the digits and the unit.
+ *
+ * Error codes survive on purpose: `TS2339` has no boundary before its digits, so
+ * it is left intact and two different diagnostics stay two different memories.
  */
 export function errorSignature(category: ErrorCategory, message: string, filePath?: string): string {
   const normalised = message
@@ -115,11 +126,11 @@ export function errorSignature(category: ErrorCategory, message: string, filePat
     .split('\n')
     .slice(0, 3)
     .join(' ')
-    .replace(/[A-Za-z]:\\[^\s:]+|\/[\w./@-]{6,}/g, '<path>')
+    .replace(/[A-Za-z]:\\[^\s:]+|[\w.@-]*(?:\/[\w.@-]+)+/g, '<path>')
     .replace(/\(\d+,\s*\d+\)|:\d+:\d+|line \d+/gi, '<pos>')
     .replace(/\b[0-9a-f]{8,}\b/gi, '<hash>')
     .replace(/'[^']{1,80}'|"[^"]{1,80}"|`[^`]{1,80}`/g, '<ident>')
-    .replace(/\b\d+(\.\d+)?\b/g, '<n>')
+    .replace(/\b\d+(?:\.\d+)?(?:e[+-]?\d+)?(?:ms|s|m|h|kib|mib|gib|kb|mb|gb|b|px|pt|%)?\b/gi, '<n>')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()

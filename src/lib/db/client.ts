@@ -116,11 +116,11 @@ export function closeDatabase(): void {
 }
 
 /**
- * Reference data that the platform itself owns (agent registry, default
- * schedules). These are configuration rows, not fabricated market data.
+ * Reference data that the platform itself owns (the agent registry). These are
+ * configuration rows describing the platform's own components, not fabricated
+ * market data.
  */
 export function seedReferenceData(database: Db): void {
-  const cfg = config();
   const now = new Date().toISOString();
   const agentRows: ReadonlyArray<[string, string, string, string]> = [
     ['research', 'Web research and source verification', 'Formulates queries, fetches and cross-checks sources, maintains provenance.', 'fast'],
@@ -143,20 +143,14 @@ export function seedReferenceData(database: Db): void {
      VALUES (?, ?, ?, ?, ?, 1, ?)
      ON CONFLICT(name) DO UPDATE SET role = excluded.role, description = excluded.description`,
   );
-  const insertSchedule = database.prepare(
-    `INSERT INTO schedules (id, name, cron, job, enabled, payload, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, '{}', ?, ?)
-     ON CONFLICT(name) DO NOTHING`,
-  );
+  // Schedules are deliberately *not* seeded here. They are owned by
+  // schedule/scheduler.ts, which is the only place that knows the job registry
+  // and can compute next_run_at from the cron expression; a row written without
+  // one would sit in the table looking configured and never fire.
   const tx = database.transaction(() => {
     for (const [name, role, description, tier] of agentRows) {
       insertAgent.run(`agent_${name}`, name, role, description, tier, now);
     }
-    const enabled = cfg.SCHEDULER_ENABLED ? 1 : 0;
-    insertSchedule.run('sched_market_scan', 'daily_market_scan', cfg.DAILY_MARKET_SCAN_CRON, 'market_scan', enabled, now, now);
-    insertSchedule.run('sched_gap_analysis', 'daily_gap_analysis', cfg.DAILY_GAP_ANALYSIS_CRON, 'gap_analysis', enabled, now, now);
-    insertSchedule.run('sched_selection', 'daily_selection', cfg.DAILY_SELECTION_CRON, 'opportunity_selection', enabled, now, now);
-    insertSchedule.run('sched_generation', 'daily_generation', cfg.DAILY_GENERATION_CRON, 'product_generation', enabled, now, now);
   });
   tx();
 }

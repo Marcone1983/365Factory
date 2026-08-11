@@ -47,9 +47,13 @@ export async function register(): Promise<void> {
     const { restorePreviews } = await import('@/lib/preview/server');
     const restored = await restorePreviews(listProjects({ limit: 200 }));
 
+    const { startScheduler } = await import('@/lib/schedule/scheduler');
+    const scheduling = startScheduler();
+
     log.info('factory ready', {
       autonomy: cfg.AUTONOMY_MODE,
       previewsRestored: restored,
+      scheduler: scheduling ? 'running' : 'disabled',
       database: cfg.databasePath,
     });
   } catch (error) {
