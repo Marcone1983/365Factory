@@ -61,7 +61,17 @@ interface CacheRow {
   expires_at: string;
 }
 
-const l1 = new LruCache<unknown>(config().CACHE_L1_MAX_ENTRIES);
+/**
+ * The L1 cache is created on first use rather than at import time: touching
+ * configuration during module evaluation would make importing this module fail
+ * in any context where the environment is not yet complete (a build step, a
+ * one-off script), which is not a property a cache should have.
+ */
+let l1Instance: LruCache<unknown> | null = null;
+function l1(): LruCache<unknown> {
+  if (!l1Instance) l1Instance = new LruCache<unknown>(config().CACHE_L1_MAX_ENTRIES);
+  return l1Instance;
+}
 const inFlight = new Map<string, Promise<unknown>>();
 
 export function cacheKey(namespace: string, parts: unknown): string {
@@ -94,7 +104,7 @@ function touch(key: string): void {
 }
 
 export function cacheGet<T>(key: string): T | undefined {
-  const hot = l1.get(key);
+  const hot = l1().get(key);
   if (hot !== undefined) {
     track('cache.lookup', 1, { level: 'l1', outcome: 'hit' });
     return hot as T;
@@ -104,7 +114,7 @@ export function cacheGet<T>(key: string): T | undefined {
   touch(key);
   const value = decode<T>(row);
   const ttl = Math.max(1, Math.floor((new Date(row.expires_at).getTime() - Date.now()) / 1000));
-  l1.set(key, value, ttl, row.value.length);
+  l1().set(key, value, ttl, row.value.length);
   track('cache.lookup', 1, { level: 'l2', outcome: 'hit' });
   return value;
 }
@@ -121,16 +131,16 @@ export function cacheSet<T>(key: string, namespace: string, value: T, ttlSeconds
          meta = excluded.meta, expires_at = excluded.expires_at`,
     )
     .run(key, namespace, serialised, serialised.length, embeddingId ?? null, toJson(meta ?? {}), nowIso(), expiresAt);
-  l1.set(key, value, ttlSeconds, serialised.length);
+  l1().set(key, value, ttlSeconds, serialised.length);
 }
 
 export function cacheDelete(key: string): void {
-  l1.delete(key);
+  l1().delete(key);
   db().prepare('DELETE FROM cache_entries WHERE key = ?').run(key);
 }
 
 export function cacheInvalidateNamespace(namespace: string): number {
-  l1.clear();
+  l1().clear();
   return db().prepare('DELETE FROM cache_entries WHERE namespace = ?').run(namespace).changes;
 }
 
@@ -265,8 +275,8 @@ export function cacheStats(): CacheStats {
     )
     .all();
   return {
-    l1Entries: l1.size,
-    l1Bytes: l1.approximateBytes,
+    l1Entries: l1().size,
+    l1Bytes: l1().approximateBytes,
     l2Entries: rows.reduce((n, r) => n + r.entries, 0),
     l2Bytes: rows.reduce((n, r) => n + r.bytes, 0),
     totalHits: rows.reduce((n, r) => n + r.hits, 0),
@@ -275,7 +285,7 @@ export function cacheStats(): CacheStats {
 }
 
 export function clearMemoryCache(): void {
-  l1.clear();
+  l1().clear();
   inFlight.clear();
 }
 

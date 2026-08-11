@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import * as esbuild from 'esbuild';
+import { createRequire } from 'node:module';
+import type * as EsbuildModule from 'esbuild';
 import { config } from '@/lib/config/env';
 import { ensureDir, walkFiles } from '@/lib/workspace/paths';
 import { runSandboxed } from '@/lib/workspace/sandbox';
@@ -37,7 +38,20 @@ function platformNodeModules(): string {
   return path.join(process.cwd(), 'node_modules');
 }
 
-function mapEsbuildMessages(messages: readonly esbuild.Message[], severity: 'error' | 'warning'): BuildDiagnostic[] {
+/**
+ * esbuild ships a native binary. It is loaded through `createRequire` at call
+ * time so that no bundler attempts to trace or parse that binary while building
+ * the console itself.
+ */
+let esbuildModule: typeof EsbuildModule | null = null;
+function esbuild(): typeof EsbuildModule {
+  if (!esbuildModule) {
+    esbuildModule = createRequire(import.meta.url)('esbuild') as typeof EsbuildModule;
+  }
+  return esbuildModule;
+}
+
+function mapEsbuildMessages(messages: readonly EsbuildModule.Message[], severity: 'error' | 'warning'): BuildDiagnostic[] {
   return messages.map((message) => ({
     severity,
     file: message.location?.file,
@@ -105,7 +119,7 @@ export async function buildWeb(project: Project, options: WebBuildOptions = {}):
     project,
     target: 'web',
     mode: options.minify === false ? 'debug' : 'release',
-    toolchain: { bundler: `esbuild ${esbuild.version}`, node: process.version },
+    toolchain: { bundler: `esbuild ${esbuild().version}`, node: process.version },
   });
 
   const sourceDir = path.join(project.workspacePath, 'source');
@@ -140,7 +154,7 @@ export async function buildWeb(project: Project, options: WebBuildOptions = {}):
     fs.rmSync(outputDir, { recursive: true, force: true });
     ensureDir(outputDir);
 
-    const result = await esbuild.build({
+    const result = await esbuild().build({
       entryPoints: [entry],
       outfile: path.join(outputDir, 'bundle.js'),
       bundle: true,
@@ -198,7 +212,7 @@ export async function buildWeb(project: Project, options: WebBuildOptions = {}):
       status: 'SUCCEEDED',
       exitCode: 0,
       diagnostics,
-      toolchain: { bundler: `esbuild ${esbuild.version}`, node: process.version, bundleBytes, totalBytes },
+      toolchain: { bundler: `esbuild ${esbuild().version}`, node: process.version, bundleBytes, totalBytes },
     });
     log.info('web build succeeded', { projectId: project.id, bundleBytes, totalBytes });
     return { build: finished, outputDir, bundleBytes, diagnostics, succeeded: true };

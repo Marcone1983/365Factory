@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 /**
  * Environment schema.
@@ -249,12 +251,6 @@ function resolveSessionSecret(parsed: RawEnv, dataDir: string): string {
       'SESSION_SECRET is required in production. Generate one with: openssl rand -hex 48',
     );
   }
-  // Lazy require keeps this module importable from edge-ish contexts that never
-  // reach this branch.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const fs = require('node:fs') as typeof import('node:fs');
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const crypto = require('node:crypto') as typeof import('node:crypto');
   const file = path.join(dataDir, 'session-secret');
   try {
     const existing = fs.readFileSync(file, 'utf8').trim();

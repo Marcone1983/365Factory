@@ -81,9 +81,9 @@ function assertInsideJail(target: string, jailRoot: string): void {
  * Builds the child environment. Everything from the platform process is dropped
  * except an explicit, non-secret allowlist.
  */
-function buildEnv(request: SandboxRequest, tmpDir: string): NodeJS.ProcessEnv {
+function buildEnv(request: SandboxRequest, tmpDir: string): Record<string, string> {
   const cfg = config();
-  const env: NodeJS.ProcessEnv = {
+  const env: Record<string, string> = {
     PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
     HOME: tmpDir,
     TMPDIR: tmpDir,
@@ -159,8 +159,10 @@ export async function runSandboxed(request: SandboxRequest): Promise<SandboxResu
   const started = Date.now();
   const child = spawn('/bin/sh', ['-c', script, 'adaf-sandbox', target, ...request.args], {
     cwd: request.cwd,
-    env: buildEnv(request, tmpDir),
-    stdio: ['ignore', 'pipe', 'pipe'],
+    // The child gets a scrubbed environment; the cast is needed because the
+    // Node typings insist ProcessEnv carries NODE_ENV, which we deliberately drop.
+    env: buildEnv(request, tmpDir) as NodeJS.ProcessEnv,
+    stdio: ['ignore', 'pipe', 'pipe'] as const,
     detached: true,
   });
 
@@ -187,8 +189,8 @@ export async function runSandboxed(request: SandboxRequest): Promise<SandboxResu
     request.onOutput?.(text, stream);
   };
 
-  child.stdout.on('data', capture('stdout'));
-  child.stderr.on('data', capture('stderr'));
+  child.stdout?.on('data', capture('stdout'));
+  child.stderr?.on('data', capture('stderr'));
 
   const killTree = (signal: NodeJS.Signals): void => {
     try {
