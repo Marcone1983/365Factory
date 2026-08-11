@@ -50,6 +50,8 @@ const DEFAULT_PRICING: PricingTable = {
     'image:gpt-image-1': { perUnit: 0.04 },
     'image:sd3.5-medium': { perUnit: 0.035 },
     'image:procedural': { perUnit: 0 },
+    'model3d:meshy': { perUnit: 0.2 },
+    'model3d:tripo': { perUnit: 0.15 },
   },
 };
 

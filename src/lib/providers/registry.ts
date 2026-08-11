@@ -12,10 +12,12 @@ import {
 import { ProceduralImageProvider } from './image/procedural';
 import { OpenAiImageProvider, StabilityImageProvider } from './image/remote';
 import { FilesystemStorageProvider } from './storage/filesystem';
+import { MeshyModel3DProvider, TripoModel3DProvider } from './model3d/generative';
 import type {
   EmbeddingProvider,
   ImageGenerationProvider,
   LLMProvider,
+  Model3DProvider,
   ProviderStatus,
   StorageProvider,
   WebSearchProvider,
@@ -35,11 +37,12 @@ interface Registry {
   embedding: EmbeddingProvider | null;
   search: WebSearchProvider | null;
   image: ImageGenerationProvider | null;
+  model3d: Model3DProvider | null;
   storage: StorageProvider | null;
 }
 
-const overrides: Registry = { llm: null, embedding: null, search: null, image: null, storage: null };
-const cache: Registry = { llm: null, embedding: null, search: null, image: null, storage: null };
+const overrides: Registry = { llm: null, embedding: null, search: null, image: null, model3d: null, storage: null };
+const cache: Registry = { llm: null, embedding: null, search: null, image: null, model3d: null, storage: null };
 
 // ---------------------------------------------------------------------- LLM --
 
@@ -157,6 +160,29 @@ export function setImageProvider(provider: ImageGenerationProvider | null): void
   overrides.image = provider;
 }
 
+// ----------------------------------------------------------------- Model3D --
+
+export function allModel3dProviders(): Model3DProvider[] {
+  return [new MeshyModel3DProvider(), new TripoModel3DProvider()];
+}
+
+/**
+ * Returns the configured generative-3D provider, or null when none is
+ * available. Null is a supported state: the subdivision-surface generators
+ * produce real models without it.
+ */
+export function getModel3dProvider(): Model3DProvider | null {
+  if (overrides.model3d) return overrides.model3d;
+  const name = config().MODEL3D_PROVIDER;
+  if (name === 'none') return null;
+  const provider = name === 'tripo' ? new TripoModel3DProvider() : new MeshyModel3DProvider();
+  return provider.status().configured ? provider : null;
+}
+
+export function setModel3dProvider(provider: Model3DProvider | null): void {
+  overrides.model3d = provider;
+}
+
 // ------------------------------------------------------------------ Storage --
 
 export function getStorageProvider(): StorageProvider {
@@ -175,6 +201,7 @@ export function resetRegistry(): void {
   overrides.embedding = null;
   overrides.search = null;
   overrides.image = null;
+  overrides.model3d = null;
   overrides.storage = null;
   cache.embedding = null;
   cache.storage = null;
@@ -189,6 +216,7 @@ export function providerStatuses(): ProviderStatus[] {
     new OpenAiEmbeddingProvider().status(),
     ...allSearchProviders().map((p) => p.status()),
     ...allImageProviders().map((p) => p.status()),
+    ...allModel3dProviders().map((p) => p.status()),
     getStorageProvider().status(),
   ];
 }

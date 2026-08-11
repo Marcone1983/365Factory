@@ -118,6 +118,21 @@ const EnvSchema = z.object({
   STABILITY_BASE_URL: z.string().url().default('https://api.stability.ai'),
   STABILITY_MODEL: z.string().default('sd3.5-medium'),
 
+  // --- Generative 3D models -------------------------------------------------
+  // When configured, hero assets (characters, vehicles, weapons, creatures) are
+  // synthesised by a text-to-3D service and imported as GLB. When absent the
+  // platform falls back to its own subdivision-surface generators, which are
+  // real geometry, not a placeholder.
+  MODEL3D_PROVIDER: z.enum(['none', 'meshy', 'tripo']).default('none'),
+  MODEL3D_TIMEOUT_MS: int(900_000, 60_000, 3_600_000),
+  MODEL3D_TRIANGLE_BUDGET: int(40_000, 1_000, 500_000),
+  MESHY_API_KEY: z.string().min(1).optional(),
+  MESHY_BASE_URL: z.string().url().default('https://api.meshy.ai'),
+  MESHY_MODEL: z.string().default('meshy-5'),
+  TRIPO_API_KEY: z.string().min(1).optional(),
+  TRIPO_BASE_URL: z.string().url().default('https://api.tripo3d.ai'),
+  TRIPO_MODEL: z.string().default('v2.5-20250123'),
+
   // --- Research / crawling -------------------------------------------------
   RESEARCH_USER_AGENT: z
     .string()

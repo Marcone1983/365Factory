@@ -662,7 +662,75 @@ CREATE TRIGGER knowledge_items_au AFTER UPDATE ON knowledge_items BEGIN
 END;
 `;
 
+
+const M003 = `
+-- Durable memory of every failure the factory has seen and of the change that
+-- actually resolved it. Consulted before any repair so a mistake is never made
+-- twice, and so a fix that is known to work is preferred over improvisation.
+CREATE TABLE error_memories (
+  id            TEXT PRIMARY KEY,
+  signature     TEXT NOT NULL,
+  category      TEXT NOT NULL,
+  phase         TEXT NOT NULL,
+  message       TEXT NOT NULL,
+  detail        TEXT NOT NULL DEFAULT '',
+  file_path     TEXT,
+  project_id    TEXT,
+  occurrences   INTEGER NOT NULL DEFAULT 1,
+  resolved      INTEGER NOT NULL DEFAULT 0,
+  fix_summary   TEXT NOT NULL DEFAULT '',
+  fix_diff      TEXT NOT NULL DEFAULT '',
+  fix_rationale TEXT NOT NULL DEFAULT '',
+  verified_by   TEXT NOT NULL DEFAULT '',
+  verified_at   TEXT,
+  reuse_count   INTEGER NOT NULL DEFAULT 0,
+  embedding_id  TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at  TEXT NOT NULL,
+  UNIQUE (signature)
+);
+CREATE INDEX idx_error_memories_category ON error_memories(category, resolved);
+CREATE INDEX idx_error_memories_seen ON error_memories(last_seen_at DESC);
+
+-- Improvements the factory proposes to its own source after observing an
+-- outcome. Reviewed and applied by the self-improvement loop.
+CREATE TABLE improvement_proposals (
+  id             TEXT PRIMARY KEY,
+  target         TEXT NOT NULL,
+  area           TEXT NOT NULL,
+  title          TEXT NOT NULL,
+  rationale      TEXT NOT NULL,
+  evidence       TEXT NOT NULL DEFAULT '[]',
+  expected_gain  TEXT NOT NULL DEFAULT '',
+  risk           TEXT NOT NULL DEFAULT 'unknown',
+  priority       REAL NOT NULL DEFAULT 0.5,
+  status         TEXT NOT NULL DEFAULT 'proposed',
+  applied_diff   TEXT NOT NULL DEFAULT '',
+  measurement    TEXT NOT NULL DEFAULT '{}',
+  project_id     TEXT,
+  factory_run_id TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+CREATE INDEX idx_improvements_status ON improvement_proposals(status, priority DESC);
+
+-- Every repair attempt is audited against the no-regression policy so a change
+-- that "fixes" a failure by deleting behaviour is rejected and recorded.
+CREATE TABLE repair_audits (
+  id           TEXT PRIMARY KEY,
+  project_id   TEXT NOT NULL,
+  attempt      INTEGER NOT NULL,
+  file_path    TEXT NOT NULL,
+  verdict      TEXT NOT NULL,
+  violations   TEXT NOT NULL DEFAULT '[]',
+  metrics      TEXT NOT NULL DEFAULT '{}',
+  created_at   TEXT NOT NULL
+);
+CREATE INDEX idx_repair_audits_project ON repair_audits(project_id, created_at DESC);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'initial_schema', sql: M001 },
   { version: 2, name: 'full_text_search', sql: M002 },
+  { version: 3, name: 'error_memory_and_self_improvement', sql: M003 },
 ];

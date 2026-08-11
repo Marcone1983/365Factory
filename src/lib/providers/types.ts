@@ -12,7 +12,7 @@ export interface ProviderStatus {
   readonly requires: readonly string[];
 }
 
-export type ProviderKind = 'llm' | 'embedding' | 'search' | 'image' | 'storage' | 'build';
+export type ProviderKind = 'llm' | 'embedding' | 'search' | 'image' | 'model3d' | 'storage' | 'build';
 
 export class ProviderNotConfiguredError extends Error {
   readonly status = 503;
@@ -208,4 +208,43 @@ export interface StorageProvider {
   exists(key: string): Promise<boolean>;
   delete(key: string): Promise<void>;
   stat(key: string): Promise<StoredObject | null>;
+}
+
+// --------------------------------------------------------------- 3D models --
+
+export type Model3DClass = 'character' | 'creature' | 'vehicle' | 'weapon' | 'prop' | 'structure' | 'environment';
+
+export interface Model3DRequest {
+  readonly prompt: string;
+  readonly negativePrompt?: string;
+  readonly modelClass: Model3DClass;
+  /** Art direction passed to the service, e.g. "realistic" or "sculpture". */
+  readonly style?: 'realistic' | 'sculpture' | 'stylised' | 'low_poly';
+  /** Target triangle budget. Providers that support decimation honour it. */
+  readonly targetTriangles?: number;
+  /** Ask the service for PBR texture maps rather than a flat base colour. */
+  readonly pbr?: boolean;
+  readonly seed?: number;
+  /** Deterministic reference image (PNG) for image-to-3D pipelines. */
+  readonly referenceImage?: Buffer;
+}
+
+export interface Model3DResult {
+  /** Binary glTF. Always validated before it is accepted into a project. */
+  readonly glb: Buffer;
+  readonly provider: string;
+  readonly model: string;
+  readonly latencyMs: number;
+  readonly costUsd: number;
+  readonly taskId: string;
+}
+
+/**
+ * Generative 3D model service. Implementations wrap an asynchronous
+ * text-to-3D / image-to-3D API: submit, poll, download the GLB.
+ */
+export interface Model3DProvider {
+  readonly name: string;
+  status(): ProviderStatus;
+  generate(request: Model3DRequest, signal?: AbortSignal): Promise<Model3DResult>;
 }

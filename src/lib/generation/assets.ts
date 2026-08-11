@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
+import { config } from '@/lib/config/env';
 import { db, newId, nowIso, toJson } from '@/lib/db/client';
 import { workspaceFor, type Project } from '@/lib/workspace/project';
-import { getImageProvider, getProceduralImageProvider } from '@/lib/providers/registry';
+import { getImageProvider, getModel3dProvider, getProceduralImageProvider } from '@/lib/providers/registry';
 import { recordUsage } from '@/lib/ai/usage';
 import { Rng, seedFrom } from '@/lib/util/random';
 import { contrastRatio, hslToRgb, parseHex, toHex, type Rgb } from '@/lib/graphics/color';
@@ -339,6 +340,12 @@ export interface MeshBrief {
   readonly complexity?: number;
   /** Passed through to the specialised generator (vehicle class, track style…). */
   readonly params?: Record<string, unknown>;
+  /**
+   * Art direction for the generative-3D service. Written by the asset agent from
+   * the product concept; when present and a service is configured, this is the
+   * preferred way to obtain the model.
+   */
+  readonly prompt?: string;
 }
 
 /**
@@ -369,6 +376,59 @@ export async function generateMeshAssets(
     let glb: Buffer;
     let generator: string;
     let validation: Record<string, unknown>;
+
+    // Preferred path: ask a generative-3D service for the asset. The coding
+    // agent describes what it needs, the service synthesises it, and the GLB is
+    // validated before it is accepted. On any failure the platform falls through
+    // to its own subdivision generators rather than shipping nothing.
+    const remote3d = getModel3dProvider();
+    const remoteEligible = remote3d !== null && highFidelity !== 'track' && brief.prompt !== undefined;
+    if (remoteEligible && remote3d) {
+      const started = Date.now();
+      try {
+        const result = await remote3d.generate({
+          prompt: brief.prompt as string,
+          modelClass: (highFidelity === 'character' ? 'character' : highFidelity === 'vehicle' ? 'vehicle' : 'weapon') as never,
+          style: 'realistic',
+          pbr: true,
+          seed: modelSeed,
+          targetTriangles: config().MODEL3D_TRIANGLE_BUDGET,
+        });
+        recordUsage({
+          provider: result.provider,
+          kind: 'image',
+          model: result.model,
+          operation: 'text_to_3d',
+          units: 1,
+          costUsd: result.costUsd,
+          latencyMs: result.latencyMs,
+          projectId: project.id,
+        });
+        recordGeneration(project, `model3d:${brief.archetype}`, result.provider, result.model, 'succeeded', result.costUsd, result.latencyMs, null);
+        assets.write(relativePath, result.glb);
+        const summary = inspectGlb(result.glb);
+        out.push(
+          persist(project, {
+            kind: 'mesh',
+            name: brief.name,
+            path: relativePath,
+            mime: 'model/gltf-binary',
+            width: 0,
+            height: 0,
+            bytes: result.glb.length,
+            sha256: crypto.createHash('sha256').update(result.glb).digest('hex'),
+            generator: `generative:${result.provider}:${result.model}`,
+            validated: summary.meshes > 0 && summary.triangles > 0,
+            validation: { ...summary, taskId: result.taskId, prompt: brief.prompt },
+          }),
+        );
+        continue;
+      } catch (error) {
+        const message = (error as Error).message;
+        recordGeneration(project, `model3d:${brief.archetype}`, remote3d.name, '', 'failed', 0, Date.now() - started, message);
+        log.warn('generative 3D provider failed; falling back to the built-in generator', { asset: brief.name, error: message });
+      }
+    }
 
     if (highFidelity) {
       const model = generateModel({
