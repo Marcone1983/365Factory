@@ -18,7 +18,10 @@ import { inspectGlb } from '../src/lib/graphics/gltf';
  *   npx tsx scripts/render-showcase.ts [outputDir]
  */
 
-const OUT = process.argv[2] ?? path.resolve('var/showcase');
+const args = process.argv.slice(2);
+const OUT = args.find((a) => !a.startsWith('--')) ?? path.resolve('var/showcase');
+/** Renders one subject at a time; three large models at once exhausts memory. */
+const ONLY = args.find((a) => a.startsWith('--only='))?.split('=')[1];
 const WIDTH = 1280;
 const HEIGHT = 800;
 
@@ -258,8 +261,11 @@ async function main(): Promise<void> {
   fs.mkdirSync(glbDir, { recursive: true });
 
   // Generate first, so the server can serve real files.
+  const subjects = ONLY ? SUBJECTS.filter((s) => s.name === ONLY || s.kind === ONLY) : SUBJECTS;
+  if (subjects.length === 0) throw new Error(`no subject matches "${ONLY ?? ''}"`);
+
   const generated: Array<{ subject: Subject; file: string; stats: Record<string, unknown> }> = [];
-  for (const subject of SUBJECTS) {
+  for (const subject of subjects) {
     process.stdout.write(`generating ${subject.kind} "${subject.name}"…\n`);
     const started = Date.now();
     const model = generateModel({

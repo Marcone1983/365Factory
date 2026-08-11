@@ -58,14 +58,17 @@ interface SpeciesProfile {
 
 const SPECIES: Record<FlowerSpecies, SpeciesProfile> = {
   // A rose is many tightly-wrapped whorls that open progressively outward.
+  // A rose petal is nearly as wide as it is long and almost circular at the
+  // margin. Narrower than that and the head reads as a chrysanthemum: a
+  // starburst of spikes rather than a cupped bloom.
   rose: {
-    petalsPerWhorl: 6,
+    petalsPerWhorl: 8,
     whorls: 4,
-    petalLength: [0.05, 0.075],
-    petalWidth: [0.032, 0.045],
-    petalPoint: 2.2,
-    openAt: (w, n) => 0.12 + (w / Math.max(1, n - 1)) ** 1.25 * 1.28,
-    petalCurl: [-0.9, -1.5],
+    petalLength: [0.05, 0.07],
+    petalWidth: [0.058, 0.078],
+    petalPoint: 1.5,
+    openAt: (w, n) => 0.14 + (w / Math.max(1, n - 1)) ** 1.4 * 0.62,
+    petalCurl: [-0.85, -1.35],
     headScale: 1,
     centreRadius: 0.012,
   },
@@ -74,8 +77,8 @@ const SPECIES: Record<FlowerSpecies, SpeciesProfile> = {
     petalsPerWhorl: 6,
     whorls: 1,
     petalLength: [0.08, 0.1],
-    petalWidth: [0.04, 0.05],
-    petalPoint: 1.6,
+    petalWidth: [0.055, 0.07],
+    petalPoint: 1.3,
     openAt: () => 0.26,
     petalCurl: [-0.5, -0.8],
     headScale: 1,
@@ -98,8 +101,8 @@ const SPECIES: Record<FlowerSpecies, SpeciesProfile> = {
     petalsPerWhorl: 3,
     whorls: 2,
     petalLength: [0.1, 0.13],
-    petalWidth: [0.03, 0.042],
-    petalPoint: 2.6,
+    petalWidth: [0.042, 0.056],
+    petalPoint: 2.0,
     openAt: (w) => 1.05 + w * 0.32,
     petalCurl: [-1.6, -2.2],
     headScale: 1,
@@ -123,12 +126,19 @@ function buildPetal(length: number, width: number, point: number, curl: number, 
 
   // A flattened profile: petals are thin across their width and thinner still
   // at the margin, which an ellipse gives directly.
-  const profile = ellipseProfile(width / 2, width * 0.055, 8);
+  const profile = ellipseProfile(width / 2, width * 0.085, 10);
 
   const blade = sweep(spine, profile, {
-    segments: 11,
-    // Wide at the shoulder, drawn to a point at the tip.
-    scaleAt: (t) => Math.sin(Math.PI * Math.min(1, t * 0.92 + 0.06)) ** (1 / point) * (1 - t * 0.12),
+    segments: 12,
+    // A petal reaches full width close to its base and holds it for most of its
+    // length, rounding off only near the margin. A sine bell instead — full
+    // width only at the midpoint — produces the spindle shape that reads as a
+    // chrysanthemum spike rather than a rose petal.
+    scaleAt: (t) => {
+      const open = Math.min(1, (t / 0.22) ** 0.65);
+      const close = 1 - 0.72 * Math.max(0, (t - 0.62) / 0.38) ** (1 / point);
+      return open * close;
+    },
     capStart: true,
     capEnd: true,
     material: FLOWER_MATERIALS.petal,
@@ -180,7 +190,9 @@ function buildHead(profile: SpeciesProfile, rng: Rng): PolyMesh {
     // Offset alternate whorls so petals sit in the gaps of the ring below.
     const stagger = (Math.PI / profile.petalsPerWhorl) * (whorl % 2);
     const placed = arrayRadial(ring, 1, v3(0, 1, 0), { sweep: stagger * 2 });
-    placed.translate(v3(0, profile.centreRadius * (0.85 - t * 0.5), 0));
+    // Outer whorls sit lower than inner ones. Stacking them at one height
+    // flattens the head into a disc however far each whorl is opened.
+    placed.translate(v3(0, profile.centreRadius * (1.15 - t * 1.5), 0));
     head.merge(placed);
   }
   return head;
@@ -278,7 +290,7 @@ export function generateBouquet(request: BouquetRequest): GeneratedBouquet {
   );
   bouquet.merge(wrap);
 
-  projectBoxUvs(bouquet, 1.4);
+  projectBoxUvs(bouquet, 0.3);
   // A bouquet is hundreds of small swept parts, so each subdivision level costs
   // four times over every one of them. One level is the practical ceiling.
   const smoothed = subdivide(bouquet, Math.max(0, Math.min(1, request.smoothness ?? 1)));
