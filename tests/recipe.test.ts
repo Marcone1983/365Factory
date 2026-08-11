@@ -3,6 +3,7 @@ import { AssetRecipeSchema, validateReferences, type AssetRecipe } from '@/lib/g
 import { interpretRecipe, RecipeError } from '@/lib/generation/recipe/interpreter';
 import { buildAssetFromRecipe } from '@/lib/generation/recipe/build';
 import { inspectGlb } from '@/lib/graphics/gltf';
+import { STREET_LANTERN } from '@/lib/generation/recipe/examples';
 
 /**
  * The recipe is the language the AI writes instead of the platform shipping a
@@ -15,103 +16,20 @@ import { inspectGlb } from '@/lib/graphics/gltf';
  * the bouquet use.
  */
 
-const LANTERN = {
-  name: 'street_lantern',
-  description: 'A cast-iron street lantern: fluted post, scrolled bracket, glazed lamp housing and a finial.',
-  targetSize: [0.6, 3.2, 0.6],
-  smoothness: 1,
-  smoothAngleDegrees: 46,
-  uvProjection: 'box',
-  uvScale: 0.6,
-  materials: [
-    { id: 'iron', family: 'metal_worn', colorIndex: 1, roughness: 0.52, textureScale: 1 },
-    { id: 'glass', family: 'glass', colorIndex: 2, transmission: 0.9, roughness: 0.05, textureScale: 0.5 },
-    { id: 'lamp', family: 'emissive_panel', colorIndex: 3, emissiveStrength: 9, textureScale: 0.25 },
-  ],
-  steps: [
-    // The post: a tapered fluted column swept up from the base.
-    {
-      op: 'sweep',
-      id: 'post',
-      curve: { type: 'line', from: [0, 0, 0], to: [0, 2.4, 0] },
-      profile: { type: 'superellipse', radiusX: 0.055, radiusY: 0.055, exponent: 3.2, segments: 16 },
-      segments: 18,
-      scaleAlong: { shape: 'easeOut', from: 1.6, to: 0.72, bias: 1.6 },
-      material: 'iron',
-    },
-    // A moulded base, revolved from its half-outline the way a turned part is.
-    {
-      op: 'revolve',
-      id: 'base',
-      outline: [
-        { x: 0.2, y: 0 },
-        { x: 0.2, y: 0.06 },
-        { x: 0.15, y: 0.1 },
-        { x: 0.16, y: 0.2 },
-        { x: 0.1, y: 0.28 },
-        { x: 0.09, y: 0.42 },
-      ],
-      segments: 24,
-      material: 'iron',
-    },
-    // The housing: a tapered glazed box.
-    {
-      op: 'loft',
-      id: 'housing',
-      sections: [
-        { at: [0, 2.4, 0], profile: { type: 'rectangle', width: 0.2, height: 0.2, cornerRadius: 0.02, segments: 16 } },
-        { at: [0, 2.55, 0], profile: { type: 'rectangle', width: 0.3, height: 0.3, cornerRadius: 0.03, segments: 16 } },
-        { at: [0, 2.95, 0], profile: { type: 'rectangle', width: 0.26, height: 0.26, cornerRadius: 0.03, segments: 16 } },
-        { at: [0, 3.05, 0], profile: { type: 'rectangle', width: 0.1, height: 0.1, cornerRadius: 0.02, segments: 16 } },
-      ],
-      material: 'glass',
-    },
-    // Four corner posts, arrayed radially around the housing.
-    {
-      op: 'sweep',
-      id: 'mullion',
-      curve: { type: 'line', from: [0, 2.55, 0], to: [0, 2.95, 0] },
-      profile: { type: 'rectangle', width: 0.022, height: 0.022, cornerRadius: 0.004, segments: 8 },
-      segments: 3,
-      material: 'iron',
-    },
-    {
-      op: 'array',
-      id: 'mullions',
-      source: 'mullion',
-      kind: 'radial',
-      count: 4,
-      axis: [0, 1, 0],
-      radius: 0.135,
-      sweepDegrees: 360,
-    },
-    // The lamp itself, inside the glass.
-    {
-      op: 'primitive',
-      id: 'bulb',
-      shape: 'sphere',
-      centre: [0, 2.74, 0],
-      radius: 0.07,
-      segments: 18,
-      material: 'lamp',
-    },
-    // The finial on top.
-    {
-      op: 'revolve',
-      id: 'finial',
-      outline: [
-        { x: 0.05, y: 3.05 },
-        { x: 0.07, y: 3.1 },
-        { x: 0.035, y: 3.18 },
-        { x: 0.012, y: 3.26 },
-        { x: 0.0, y: 3.3 },
-      ],
-      segments: 16,
-      material: 'iron',
-    },
-  ],
-  outputs: ['post', 'base', 'housing', 'mullions', 'bulb', 'finial'],
-} as const;
+const LANTERN = STREET_LANTERN;
+
+/** Minimal brief for the fixtures that exist only to exercise one operator. */
+const BLOCK_BRIEF = {
+  subject: 'A plain concrete block used as a boolean test fixture',
+  style: 'Untextured engineering test geometry, no stylistic intent whatsoever.',
+  purpose: 'Exists only to verify that a subtraction removes volume and adds surface.',
+  mustRead: ['a rectangular block', 'a circular bore passing right through it', 'sharp unfilleted edges'],
+  silhouette: 'A square seen from any face, with a circular hole visible straight through the middle.',
+  proportions: ['the bore diameter is half the block width'],
+  surfaceNotes: 'Flat untextured concrete; no wear, no variation.',
+  avoid: ['a bore that stops short of passing through'],
+  acceptance: ['the hole passes completely through the block', 'the block is otherwise a plain cube'],
+};
 
 function parse(input: unknown): AssetRecipe {
   const result = AssetRecipeSchema.safeParse(input);
@@ -132,7 +50,7 @@ describe('recipe validation', () => {
     const recipe = parse({
       ...LANTERN,
       steps: [
-        { op: 'array', id: 'copies', source: 'later', kind: 'radial', count: 4 },
+        { op: 'array', id: 'copies', note: 'arrays a part that does not exist yet', source: 'later', kind: 'radial', count: 4 },
         ...LANTERN.steps,
       ],
       outputs: ['copies'],
@@ -168,10 +86,53 @@ describe('recipe validation', () => {
     ).toThrow();
   });
 
+  it('refuses a recipe with no brief at all', () => {
+    const { brief, ...withoutBrief } = LANTERN as unknown as Record<string, unknown>;
+    void brief;
+    expect(() => parse(withoutBrief)).toThrow(/brief/);
+  });
+
+  it('refuses a thin brief, which is the failure this schema exists to prevent', () => {
+    // A one-line brief produces geometry that is plausible and wrong, and
+    // leaves the visual review with nothing specific to check against.
+    expect(() =>
+      parse({ ...LANTERN, brief: { ...LANTERN.brief, mustRead: ['a lantern'] } }),
+    ).toThrow();
+
+    expect(() =>
+      parse({ ...LANTERN, brief: { ...LANTERN.brief, mustRead: ['a post', 'a lamp', 'a base'], silhouette: 'tall' } }),
+    ).toThrow(/silhouette/);
+
+    expect(() =>
+      parse({ ...LANTERN, brief: { ...LANTERN.brief, acceptance: ['it looks good'] } }),
+    ).toThrow();
+
+    expect(() => parse({ ...LANTERN, brief: { ...LANTERN.brief, style: 'iron' } })).toThrow(/style/);
+    expect(() => parse({ ...LANTERN, brief: { ...LANTERN.brief, avoid: [] } })).toThrow(/avoid/);
+  });
+
+  it('requires every step to say what it depicts', () => {
+    const { note, ...withoutNote } = LANTERN.steps[0] as unknown as Record<string, unknown>;
+    void note;
+    expect(() => parse({ ...LANTERN, steps: [withoutNote], outputs: ['post'] })).toThrow(/note/);
+    expect(() =>
+      parse({ ...LANTERN, steps: [{ ...LANTERN.steps[0], note: 'post' }], outputs: ['post'] }),
+    ).toThrow(/note/);
+  });
+
+  it('carries the brief through parsing so the review step can read it', () => {
+    const recipe = parse(LANTERN);
+    expect(recipe.brief.mustRead.length).toBeGreaterThanOrEqual(3);
+    expect(recipe.brief.acceptance.length).toBeGreaterThanOrEqual(2);
+    // Acceptance criteria have to be answerable by looking at a picture.
+    expect(recipe.brief.acceptance.every((line) => line.length > 10)).toBe(true);
+    expect(recipe.steps.every((step) => step.note.length >= 8)).toBe(true);
+  });
+
   it('rejects a linear array with no step vector', () => {
     const recipe = parse({
       ...LANTERN,
-      steps: [LANTERN.steps[0], { op: 'array', id: 'row', source: 'post', kind: 'linear', count: 4 }],
+      steps: [LANTERN.steps[0], { op: 'array', id: 'row', note: 'a linear array missing its step vector', source: 'post', kind: 'linear', count: 4 }],
       outputs: ['row'],
     });
     expect(validateReferences(recipe).join(' ')).toMatch(/no step vector/);
@@ -223,7 +184,7 @@ describe('interpretation', () => {
     const recipe = parse(LANTERN) as AssetRecipe;
     const broken: AssetRecipe = {
       ...recipe,
-      steps: [{ op: 'mirror', id: 'copy', source: 'ghost', axis: 'x' }],
+      steps: [{ op: 'mirror', id: 'copy', note: 'mirrors a part that was never built', source: 'ghost', axis: 'x' }],
       outputs: ['copy'],
     };
     expect(() => interpretRecipe(broken)).toThrow(RecipeError);
@@ -238,6 +199,7 @@ describe('interpretation', () => {
         {
           op: 'loft',
           id: 'bad',
+          note: 'sections with mismatched point counts, which cannot be lofted',
           sections: [
             { at: [0, 0, 0], profile: { type: 'ellipse', radiusX: 1, radiusY: 1, segments: 8 } },
             { at: [0, 1, 0], profile: { type: 'ellipse', radiusX: 1, radiusY: 1, segments: 16 } },
@@ -259,13 +221,14 @@ describe('boolean operations inside a recipe', () => {
     const recipe = parse({
       name: 'pierced_block',
       description: 'A block with a bore through it.',
+      brief: BLOCK_BRIEF,
       targetSize: [2, 2, 2],
       smoothness: 0,
       materials: [{ id: 'stone', family: 'concrete', colorIndex: 0 }],
       steps: [
-        { op: 'primitive', id: 'block', shape: 'box', centre: [0, 0, 0], size: [2, 2, 2], material: 'stone' },
-        { op: 'primitive', id: 'bore', shape: 'cylinder', centre: [0, 0, 0], size: [1, 4, 1], radius: 0.5, segments: 24, material: 'stone' },
-        { op: 'boolean', id: 'pierced', mode: 'subtract', base: 'block', tools: ['bore'] },
+        { op: 'primitive', id: 'block', note: 'the solid the bore is cut from', shape: 'box', centre: [0, 0, 0], size: [2, 2, 2], material: 'stone' },
+        { op: 'primitive', id: 'bore', note: 'the cutting tool, longer than the block so it passes clean through', shape: 'cylinder', centre: [0, 0, 0], size: [1, 4, 1], radius: 0.5, segments: 24, material: 'stone' },
+        { op: 'boolean', id: 'pierced', note: 'the block with the bore removed', mode: 'subtract', base: 'block', tools: ['bore'] },
       ],
       outputs: ['pierced'],
     });
@@ -274,10 +237,11 @@ describe('boolean operations inside a recipe', () => {
       parse({
         name: 'solid_block',
         description: 'A block.',
+        brief: BLOCK_BRIEF,
         targetSize: [2, 2, 2],
         smoothness: 0,
         materials: [{ id: 'stone', family: 'concrete', colorIndex: 0 }],
-        steps: [{ op: 'primitive', id: 'block', shape: 'box', centre: [0, 0, 0], size: [2, 2, 2], material: 'stone' }],
+        steps: [{ op: 'primitive', id: 'block', note: 'the same block, uncut, as the control', shape: 'box', centre: [0, 0, 0], size: [2, 2, 2], material: 'stone' }],
         outputs: ['block'],
       }),
     );

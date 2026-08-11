@@ -126,11 +126,21 @@ const TransformSchema = z.object({
   scale: z.union([finite(-100, 100), Vec3Schema]).optional(),
 });
 
+/**
+ * Every step carries a note saying what that part depicts and why it has the
+ * shape it has. It costs the model almost nothing to write and it is the
+ * difference between a recipe that can be debugged and a wall of coordinates:
+ * when a render comes back wrong, the note is what identifies which step is
+ * responsible for the part that is wrong.
+ */
+const noteField = z.string().min(8).max(300);
+
 /** A named part the recipe builds and can then reference, array or cut with. */
 const StepSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('sweep'),
     id: z.string().min(1).max(64),
+    note: noteField,
     curve: CurveSchema,
     profile: ProfileSchema,
     segments: z.number().int().min(2).max(400).default(24),
@@ -143,6 +153,7 @@ const StepSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('revolve'),
     id: z.string().min(1).max(64),
+    note: noteField,
     /** Half-outline in the XY plane; revolved about Y. */
     outline: z.array(Point2Schema).min(2).max(128),
     segments: z.number().int().min(3).max(128).default(24),
@@ -152,6 +163,7 @@ const StepSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('loft'),
     id: z.string().min(1).max(64),
+    note: noteField,
     /** Cross-sections along a path; the workhorse for vehicles and hulls. */
     sections: z
       .array(z.object({ at: Vec3Schema, profile: ProfileSchema }))
@@ -165,6 +177,7 @@ const StepSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('primitive'),
     id: z.string().min(1).max(64),
+    note: noteField,
     shape: z.enum(['box', 'sphere', 'cylinder']),
     centre: Vec3Schema.default([0, 0, 0]),
     size: Vec3Schema.default([1, 1, 1]),
@@ -176,6 +189,7 @@ const StepSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('array'),
     id: z.string().min(1).max(64),
+    note: noteField,
     source: z.string().min(1).max(64),
     kind: z.enum(['linear', 'radial', 'alongCurve']),
     count: z.number().int().min(1).max(512),
@@ -194,6 +208,7 @@ const StepSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('boolean'),
     id: z.string().min(1).max(64),
+    note: noteField,
     mode: z.enum(['union', 'subtract', 'intersect']),
     base: z.string().min(1).max(64),
     tools: z.array(z.string().min(1).max(64)).min(1).max(24),
@@ -201,6 +216,7 @@ const StepSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('deform'),
     id: z.string().min(1).max(64),
+    note: noteField,
     source: z.string().min(1).max(64),
     kind: z.enum(['bend', 'twist', 'taper', 'displace']),
     axis: z.enum(['x', 'y', 'z']).default('y'),
@@ -215,18 +231,21 @@ const StepSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('transform'),
     id: z.string().min(1).max(64),
+    note: noteField,
     source: z.string().min(1).max(64),
     apply: TransformSchema,
   }),
   z.object({
     op: z.literal('mirror'),
     id: z.string().min(1).max(64),
+    note: noteField,
     source: z.string().min(1).max(64),
     axis: z.enum(['x', 'y', 'z']).default('x'),
   }),
   z.object({
     op: z.literal('merge'),
     id: z.string().min(1).max(64),
+    note: noteField,
     sources: z.array(z.string().min(1).max(64)).min(1).max(64),
   }),
 ]);
@@ -272,10 +291,69 @@ const MaterialSchema = z.object({
   textureScale: finite(0.125, 2).default(1),
 });
 
+/**
+ * The written specification of the asset.
+ *
+ * This is not documentation. It does three jobs that nothing else can do:
+ *
+ *  1. It forces the model to decide what the object *is* before it starts
+ *     emitting coordinates. A recipe written straight to numbers produces
+ *     plausible geometry that is not the requested object; one written after
+ *     articulating the silhouette, the proportions and the reference examples
+ *     produces geometry that is.
+ *
+ *  2. It is the contract the finished render is judged against. The visual
+ *     review step has to compare the picture to *something*, and "a lantern"
+ *     is not enough to catch a lantern with no glazing. `mustRead` and
+ *     `acceptance` are written to be checkable by looking.
+ *
+ *  3. It is what the semantic cache matches on, so a second request for
+ *     substantially the same object reuses the asset instead of paying for it
+ *     again.
+ *
+ * The minimum lengths are deliberate. A one-line brief is the failure mode this
+ * schema exists to prevent, so the schema refuses one.
+ */
+const BriefSchema = z.object({
+  /** The object in one precise noun phrase: "Victorian cast-iron street lantern". */
+  subject: z.string().min(8).max(160),
+  /** Period, region, genre, design language. What a modeller would be told. */
+  style: z.string().min(12).max(400),
+  /** What it is for in the game, which governs how much detail goes where. */
+  purpose: z.string().min(12).max(300),
+  /**
+   * The features that must be recognisable, most important first. Each is a
+   * concrete visual claim, not an adjective: "four glazed panels separated by
+   * slim iron mullions", never "detailed housing".
+   */
+  mustRead: z.array(z.string().min(8).max(200)).min(3).max(16),
+  /** How the shape should read as a black silhouette, where most recognition happens. */
+  silhouette: z.string().min(16).max(400),
+  /** Real-world proportion anchors: what is how many times what. */
+  proportions: z.array(z.string().min(6).max(200)).min(1).max(12),
+  /** Surface finish, wear, age, how light should behave on it. */
+  surfaceNotes: z.string().min(12).max(400),
+  /** Mistakes typical of this object that the recipe must not make. */
+  avoid: z.array(z.string().min(6).max(200)).min(1).max(12),
+  /**
+   * Checks a reviewer can perform on a render and answer yes or no to. These
+   * drive the automated visual review, so they must be observable, not
+   * intentions: "the bulb is visible through the glazing" passes or fails;
+   * "looks premium" cannot.
+   */
+  acceptance: z.array(z.string().min(10).max(240)).min(2).max(12),
+  /** Named real objects the model is working from, if any. */
+  references: z.array(z.string().min(3).max(120)).max(8).default([]),
+});
+
+export type AssetBrief = z.infer<typeof BriefSchema>;
+
 export const AssetRecipeSchema = z.object({
   name: z.string().min(1).max(96),
-  /** What the recipe is meant to depict; carried into validation and logs. */
+  /** One-line summary. The detailed specification lives in `brief`. */
   description: z.string().min(1).max(400),
+  /** The written specification this recipe is an attempt to satisfy. */
+  brief: BriefSchema,
   /** Overall size the finished asset should occupy, in metres. */
   targetSize: Vec3Schema,
   /** Higher values subdivide more; bounded because cost is 4^level. */
