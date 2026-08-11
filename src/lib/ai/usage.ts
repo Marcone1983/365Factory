@@ -203,3 +203,91 @@ export function assertWithinBudget(): void {
     throw new BudgetExceededError('cost', state.costUsed, state.costLimit);
   }
 }
+
+// ------------------------------------------------------------- breakdowns --
+
+export interface UsageBreakdownRow {
+  readonly key: string;
+  readonly calls: number;
+  readonly costUsd: number;
+  readonly savedUsd: number;
+  readonly tokensIn: number;
+  readonly tokensOut: number;
+  readonly cacheHits: number;
+  readonly errors: number;
+  readonly p50LatencyMs: number;
+}
+
+const BREAKDOWN_COLUMNS = `
+  COUNT(*) AS calls,
+  COALESCE(SUM(cost_usd), 0) AS costUsd,
+  COALESCE(SUM(saved_usd), 0) AS savedUsd,
+  COALESCE(SUM(tokens_in), 0) AS tokensIn,
+  COALESCE(SUM(tokens_out), 0) AS tokensOut,
+  COALESCE(SUM(CASE WHEN cache_hit != 'miss' THEN 1 ELSE 0 END), 0) AS cacheHits,
+  COALESCE(SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END), 0) AS errors,
+  COALESCE(CAST(AVG(latency_ms) AS INTEGER), 0) AS p50LatencyMs`;
+
+/**
+ * Spend grouped by a recorded column. Only a fixed set of columns is groupable:
+ * the column name is chosen from this map, never interpolated from a caller's
+ * string, so no query text can originate outside this module.
+ */
+const GROUPABLE = {
+  operation: 'operation',
+  model: 'model',
+  provider: 'provider',
+  kind: 'kind',
+} as const;
+
+export type UsageGroup = keyof typeof GROUPABLE;
+
+export function usageBreakdown(group: UsageGroup, sinceIso: string, limit = 20): UsageBreakdownRow[] {
+  const column = GROUPABLE[group];
+  return db()
+    .prepare<[string, number], UsageBreakdownRow>(
+      `SELECT ${column} AS key, ${BREAKDOWN_COLUMNS}
+       FROM api_usage WHERE ts >= ? AND ${column} != ''
+       GROUP BY ${column} ORDER BY costUsd DESC, calls DESC LIMIT ?`,
+    )
+    .all(sinceIso, limit);
+}
+
+export interface DailyUsagePoint {
+  readonly day: string;
+  readonly calls: number;
+  readonly costUsd: number;
+  readonly savedUsd: number;
+}
+
+/** Daily totals for the cost chart, oldest first. */
+export function dailyUsage(days = 14): DailyUsagePoint[] {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString();
+  return db()
+    .prepare<[string], DailyUsagePoint>(
+      `SELECT substr(ts, 1, 10) AS day,
+              COUNT(*) AS calls,
+              COALESCE(SUM(cost_usd), 0) AS costUsd,
+              COALESCE(SUM(saved_usd), 0) AS savedUsd
+       FROM api_usage WHERE ts >= ?
+       GROUP BY day ORDER BY day ASC`,
+    )
+    .all(since);
+}
+
+export interface UsageFailure {
+  readonly ts: string;
+  readonly provider: string;
+  readonly operation: string;
+  readonly model: string;
+  readonly errorCode: string | null;
+}
+
+export function recentFailures(limit = 10): UsageFailure[] {
+  return db()
+    .prepare<[number], UsageFailure>(
+      `SELECT ts, provider, operation, model, error_code AS errorCode
+       FROM api_usage WHERE success = 0 ORDER BY ts DESC LIMIT ?`,
+    )
+    .all(limit);
+}

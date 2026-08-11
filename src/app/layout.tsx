@@ -21,8 +21,12 @@ export const viewport: Viewport = {
 
 const NAV: ReadonlyArray<{ href: string; label: string; section?: string }> = [
   { href: '/', label: 'Overview', section: 'Factory' },
+  { href: '/chat', label: 'Chat' },
+  { href: '/discovery', label: 'Discovery' },
   { href: '/projects', label: 'Products' },
-  { href: '/health', label: 'System health', section: 'Operations' },
+  { href: '/schedules', label: 'Automation', section: 'Operations' },
+  { href: '/costs', label: 'Cost & cache' },
+  { href: '/health', label: 'System health' },
 ];
 
 export default async function RootLayout({ children }: { children: React.ReactNode }): Promise<React.ReactElement> {

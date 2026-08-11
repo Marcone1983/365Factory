@@ -55,6 +55,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <a className="button" href={`/projects/${project.id}/ide`}>Open in IDE</a>
           {apk ? (
             <a className="button" data-variant="primary" href={`/api/artifacts/${apk.id}`}>Download APK</a>
           ) : null}
