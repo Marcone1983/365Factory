@@ -7,9 +7,14 @@
  */
 export * from './core';
 export * from './input';
+export * from './gamepad';
 export * from './world';
 export * from './physics';
+export * from './vehicle';
+export * from './combat';
 export * from './fx';
+export * from './render';
+export * from './models';
 export * from './audio';
 export * from './ui';
 export * from './state';

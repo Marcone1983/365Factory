@@ -56,36 +56,42 @@ interface SlotSpec {
   readonly family: MaterialFamily;
   readonly colorIndex: number;
   readonly textured: boolean;
+  /**
+   * Texture resolution for this slot, relative to the model's base size. Small
+   * or rarely-seen surfaces get less: a 512px map for a character's eyes costs
+   * as much as one for the whole body and is never seen at that density.
+   */
+  readonly textureScale?: number;
   readonly overrides?: Partial<{ metallic: number; roughness: number; clearcoat: number; transmission: number; emissiveStrength: number }>;
 }
 
 const SLOTS: Record<ModelKind, readonly SlotSpec[]> = {
   character: [
-    { slot: CHARACTER_MATERIALS.skin, name: 'skin', family: 'skin', colorIndex: 4, textured: true },
-    { slot: CHARACTER_MATERIALS.hair, name: 'hair', family: 'hair', colorIndex: 5, textured: true },
-    { slot: CHARACTER_MATERIALS.garment, name: 'garment', family: 'fabric', colorIndex: 0, textured: true },
-    { slot: CHARACTER_MATERIALS.accent, name: 'accent', family: 'leather', colorIndex: 1, textured: true },
+    { slot: CHARACTER_MATERIALS.skin, name: 'skin', family: 'skin', colorIndex: 4, textured: true, textureScale: 1 },
+    { slot: CHARACTER_MATERIALS.hair, name: 'hair', family: 'hair', colorIndex: 5, textured: true, textureScale: 0.5 },
+    { slot: CHARACTER_MATERIALS.garment, name: 'garment', family: 'fabric', colorIndex: 0, textured: true, textureScale: 1 },
+    { slot: CHARACTER_MATERIALS.accent, name: 'accent', family: 'leather', colorIndex: 1, textured: true, textureScale: 0.5 },
     { slot: CHARACTER_MATERIALS.eyes, name: 'eyes', family: 'glass', colorIndex: 2, textured: false, overrides: { roughness: 0.08 } },
   ],
   vehicle: [
     { slot: VEHICLE_MATERIALS.paint, name: 'paint', family: 'car_paint', colorIndex: 0, textured: true, overrides: { clearcoat: 1 } },
     { slot: VEHICLE_MATERIALS.glass, name: 'glass', family: 'glass', colorIndex: 3, textured: false, overrides: { transmission: 0.88, roughness: 0.04 } },
-    { slot: VEHICLE_MATERIALS.tyre, name: 'tyre', family: 'rubber', colorIndex: 6, textured: true },
-    { slot: VEHICLE_MATERIALS.trim, name: 'trim', family: 'metal_brushed', colorIndex: 2, textured: true },
-    { slot: VEHICLE_MATERIALS.lights, name: 'lights', family: 'emissive_panel', colorIndex: 1, textured: true, overrides: { emissiveStrength: 6 } },
+    { slot: VEHICLE_MATERIALS.tyre, name: 'tyre', family: 'rubber', colorIndex: 6, textured: true, textureScale: 0.5 },
+    { slot: VEHICLE_MATERIALS.trim, name: 'trim', family: 'metal_brushed', colorIndex: 2, textured: true, textureScale: 0.5 },
+    { slot: VEHICLE_MATERIALS.lights, name: 'lights', family: 'emissive_panel', colorIndex: 1, textured: true, textureScale: 0.25, overrides: { emissiveStrength: 6 } },
   ],
   track: [
     { slot: TRACK_MATERIALS.asphalt, name: 'asphalt', family: 'asphalt', colorIndex: 6, textured: true },
-    { slot: TRACK_MATERIALS.kerb, name: 'kerb', family: 'concrete', colorIndex: 1, textured: true },
-    { slot: TRACK_MATERIALS.barrier, name: 'barrier', family: 'metal_worn', colorIndex: 2, textured: true },
-    { slot: TRACK_MATERIALS.runoff, name: 'runoff', family: 'sand', colorIndex: 7, textured: true },
+    { slot: TRACK_MATERIALS.kerb, name: 'kerb', family: 'concrete', colorIndex: 1, textured: true, textureScale: 0.5 },
+    { slot: TRACK_MATERIALS.barrier, name: 'barrier', family: 'metal_worn', colorIndex: 2, textured: true, textureScale: 0.5 },
+    { slot: TRACK_MATERIALS.runoff, name: 'runoff', family: 'sand', colorIndex: 7, textured: true, textureScale: 0.5 },
     { slot: TRACK_MATERIALS.markings, name: 'markings', family: 'concrete', colorIndex: 3, textured: false },
   ],
   weapon: [
     { slot: WEAPON_MATERIALS.body, name: 'body', family: 'metal_worn', colorIndex: 2, textured: true },
-    { slot: WEAPON_MATERIALS.grip, name: 'grip', family: 'leather', colorIndex: 6, textured: true },
-    { slot: WEAPON_MATERIALS.accent, name: 'accent', family: 'metal_brushed', colorIndex: 1, textured: true },
-    { slot: WEAPON_MATERIALS.emissive, name: 'emissive', family: 'emissive_panel', colorIndex: 0, textured: true, overrides: { emissiveStrength: 8 } },
+    { slot: WEAPON_MATERIALS.grip, name: 'grip', family: 'leather', colorIndex: 6, textured: true, textureScale: 0.5 },
+    { slot: WEAPON_MATERIALS.accent, name: 'accent', family: 'metal_brushed', colorIndex: 1, textured: true, textureScale: 0.5 },
+    { slot: WEAPON_MATERIALS.emissive, name: 'emissive', family: 'emissive_panel', colorIndex: 0, textured: true, textureScale: 0.25, overrides: { emissiveStrength: 8 } },
   ],
 };
 
@@ -202,7 +208,8 @@ export function generateModel(request: ModelRequest): GeneratedModel {
     };
 
     if (slot.textured) {
-      const set = generateTextureSet(recipe, { seed: (request.seed ^ seedFrom(slot.name)) >>> 0, size: textureSize });
+      const slotSize = Math.max(64, Math.round((textureSize * (slot.textureScale ?? 1)) / 64) * 64);
+      const set = generateTextureSet(recipe, { seed: (request.seed ^ seedFrom(slot.name)) >>> 0, size: slotSize });
       const albedoIndex = textures.push({ name: `${slot.name}_albedo`, png: set.albedo, srgb: true }) - 1;
       const normalIndex = textures.push({ name: `${slot.name}_normal`, png: set.normal, srgb: false }) - 1;
       const ormIndex = textures.push({ name: `${slot.name}_orm`, png: set.orm, srgb: false }) - 1;

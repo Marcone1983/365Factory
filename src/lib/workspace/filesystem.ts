@@ -14,8 +14,14 @@ import { counter } from '@/lib/observability/metrics';
  * stream all see the same events.
  */
 
+/** Source and text files: anything larger is a generation defect, not an asset. */
 export const MAX_FILE_BYTES = 4 * 1024 * 1024;
-export const MAX_WORKSPACE_BYTES = 512 * 1024 * 1024;
+/**
+ * Binary assets. A rigged character with a full PBR texture set is legitimately
+ * several megabytes of GLB, so binaries get their own, larger ceiling.
+ */
+export const MAX_BINARY_BYTES = 24 * 1024 * 1024;
+export const MAX_WORKSPACE_BYTES = 1536 * 1024 * 1024;
 
 const BINARY_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.webp', '.gif', '.ico', '.bin', '.glb', '.gltf', '.ktx2',
@@ -117,8 +123,9 @@ export class WorkspaceFs {
 
   write(relative: string, contents: string | Buffer): FileChange {
     const data = Buffer.isBuffer(contents) ? contents : Buffer.from(contents, 'utf8');
-    if (data.length > MAX_FILE_BYTES) {
-      throw new WorkspaceQuotaError(`file ${relative} exceeds the ${MAX_FILE_BYTES} byte limit`);
+    const limit = this.isBinary(relative) ? MAX_BINARY_BYTES : MAX_FILE_BYTES;
+    if (data.length > limit) {
+      throw new WorkspaceQuotaError(`file ${relative} is ${data.length} bytes, over the ${limit} byte limit for this file type`);
     }
     const target = this.absolute(relative);
     const existed = fs.existsSync(target);

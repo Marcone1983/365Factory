@@ -115,6 +115,7 @@ export class Engine {
   private running = false;
   private rafHandle = 0;
   private lastPerfEmit = 0;
+  private externalRenderer: ((deltaSeconds: number) => void) | null = null;
   private fpsWindow: number[] = [];
   private disposed = false;
 
@@ -198,6 +199,14 @@ export class Engine {
     window.removeEventListener('unhandledrejection', this.handleRejection);
     disposeObject(this.scene);
     this.renderer.dispose();
+  }
+
+  /**
+   * Replaces the direct draw call with a custom renderer (the post-processing
+   * composer). Passing null restores direct rendering.
+   */
+  setExternalRenderer(render: ((deltaSeconds: number) => void) | null): void {
+    this.externalRenderer = render;
   }
 
   setQuality(tier: QualityTier): void {
@@ -290,7 +299,8 @@ export class Engine {
     const alpha = this.accumulator / this.stepSeconds;
     const renderCtx: RenderContext = { alpha, elapsed: this.elapsed, app: this };
     for (const system of this.systems) system.render?.(renderCtx);
-    this.renderer.render(this.scene, this.camera);
+    if (this.externalRenderer) this.externalRenderer(delta);
+    else this.renderer.render(this.scene, this.camera);
 
     const now = performance.now();
     if (now - this.lastPerfEmit > 2000) {
