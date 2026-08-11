@@ -5,6 +5,7 @@ import { generateCharacter, CHARACTER_MATERIALS, type CharacterRequest } from '.
 import { generateVehicle, VEHICLE_MATERIALS, type VehicleRequest } from './vehicle';
 import { generateTrack, TRACK_MATERIALS, type TrackRequest, type GeneratedTrack } from './track';
 import { generateWeapon, WEAPON_MATERIALS, type WeaponRequest } from './weapon';
+import { generateBouquet, FLOWER_MATERIALS, type BouquetRequest } from './flowers';
 import { createLogger } from '@/lib/observability/logger';
 
 const log = createLogger('generation.models');
@@ -22,7 +23,7 @@ const log = createLogger('generation.models');
  * mapping is what stops every generated asset from looking like the same plastic.
  */
 
-export type ModelKind = 'character' | 'vehicle' | 'track' | 'weapon';
+export type ModelKind = 'character' | 'vehicle' | 'track' | 'weapon' | 'bouquet';
 
 export interface ModelRequest {
   readonly kind: ModelKind;
@@ -36,6 +37,7 @@ export interface ModelRequest {
   readonly vehicle?: Omit<VehicleRequest, 'name' | 'seed'>;
   readonly track?: Omit<TrackRequest, 'name' | 'seed'>;
   readonly weapon?: Omit<WeaponRequest, 'name' | 'seed'>;
+  readonly bouquet?: Omit<BouquetRequest, 'name' | 'seed'>;
 }
 
 export interface GeneratedModel {
@@ -98,6 +100,15 @@ const SLOTS: Record<ModelKind, readonly SlotSpec[]> = {
     { slot: TRACK_MATERIALS.runoff, name: 'runoff', family: 'sand', colorIndex: 7, textured: true, textureScale: 0.5 },
     { slot: TRACK_MATERIALS.markings, name: 'markings', family: 'concrete', colorIndex: 3, textured: false },
   ],
+  // Indices 4-7 of the extended palette are skin, hair and neutrals, reserved
+  // for characters. Foliage must draw from the caller's own palette entries or
+  // it comes out flesh-coloured.
+  bouquet: [
+    { slot: FLOWER_MATERIALS.petal, name: 'petal', family: 'fabric', colorIndex: 0, textured: true, textureScale: 0.5, overrides: { roughness: 0.58 } },
+    { slot: FLOWER_MATERIALS.stem, name: 'stem', family: 'fabric', colorIndex: 1, textured: true, textureScale: 0.25, overrides: { roughness: 0.72 } },
+    { slot: FLOWER_MATERIALS.leaf, name: 'leaf', family: 'fabric', colorIndex: 1, textured: true, textureScale: 0.5, overrides: { roughness: 0.5 } },
+    { slot: FLOWER_MATERIALS.centre, name: 'centre', family: 'fabric', colorIndex: 3, textured: true, textureScale: 0.25, overrides: { roughness: 0.85 } },
+  ],
   weapon: [
     { slot: WEAPON_MATERIALS.body, name: 'body', family: 'metal_worn', colorIndex: 2, textured: true },
     { slot: WEAPON_MATERIALS.grip, name: 'grip', family: 'leather', colorIndex: 6, textured: true, textureScale: 0.5 },
@@ -158,6 +169,14 @@ function buildGeometry(request: ModelRequest): BuiltGeometry {
         gameplay: trackGameplayData(model),
       };
     }
+    case 'bouquet': {
+      const model = generateBouquet({ name: request.name, seed: request.seed, smoothness: request.smoothness, ...request.bouquet });
+      return {
+        input: { meshes: model.meshes, nodes: model.nodes },
+        renderedTriangleCount: model.triangleCount,
+        gameplay: { species: model.species, stems: model.stems },
+      };
+    }
     case 'weapon':
     default: {
       const model = generateWeapon({ name: request.name, seed: request.seed, smoothness: request.smoothness, ...request.weapon });
@@ -197,6 +216,7 @@ const TRIANGLE_BUDGETS: Record<ModelKind, number> = {
   vehicle: 140_000,
   track: 400_000,
   weapon: 60_000,
+  bouquet: 260_000,
 };
 
 export function generateModel(request: ModelRequest): GeneratedModel {
