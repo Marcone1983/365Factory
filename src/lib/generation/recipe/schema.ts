@@ -327,8 +327,13 @@ const BriefSchema = z.object({
    * slim iron mullions", never "detailed housing".
    */
   mustRead: z.array(z.string().min(8).max(200)).min(3).max(16),
-  /** How the shape should read as a black silhouette, where most recognition happens. */
-  silhouette: z.string().min(16).max(400),
+  /**
+   * How the shape should read as a black silhouette, where most recognition
+   * happens. A complex object needs room here — describing the outline of a car
+   * properly takes more words than describing a lamp post — so the ceiling is
+   * generous while the floor stays strict.
+   */
+  silhouette: z.string().min(16).max(900),
   /** Real-world proportion anchors: what is how many times what. */
   proportions: z.array(z.string().min(6).max(200)).min(1).max(12),
   /** Surface finish, wear, age, how light should behave on it. */

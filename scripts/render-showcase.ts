@@ -274,7 +274,7 @@ async function main(): Promise<void> {
     for (const example of RECIPE_EXAMPLES) {
       process.stdout.write(`building recipe "${example.recipe.name}"…\n`);
       const built = buildAssetFromRecipe(example.recipe, {
-        palette: ['#c9a227', '#2b2f36', '#dfe7f5', '#ffd88a'],
+        palette: ['#8c1230', '#ff3355', '#c9d1de', '#101418', '#8892a0', '#555a63', '#17171b'],
         seed: 4242,
         textureSize: 1024,
       });
@@ -291,9 +291,10 @@ async function main(): Promise<void> {
           seed: 0,
           palette: [],
           shots: [
-            [30, 10, 1.0, 'three-quarter'],
-            [90, 6, 1.0, 'side'],
-            [25, 22, 0.55, 'detail'],
+            [32, 12, 1.0, 'three-quarter'],
+            [90, 4, 1.0, 'side'],
+            [0, 6, 1.0, 'front'],
+            [25, 50, 1.0, 'above'],
           ],
         },
         file,

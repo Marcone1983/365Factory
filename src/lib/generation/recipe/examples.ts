@@ -173,6 +173,12 @@ export const STREET_LANTERN: AssetRecipe = AssetRecipeSchema.parse({
   outputs: ['post', 'base', 'housing', 'mullions', 'bulb', 'finial'],
 });
 
+export { SUPERCAR } from './supercar';
+
+// Imported after STREET_LANTERN so the simpler example is read first.
+import { SUPERCAR as SUPERCAR_RECIPE } from './supercar';
+
 export const RECIPE_EXAMPLES: ReadonlyArray<{ readonly title: string; readonly recipe: AssetRecipe }> = [
   { title: 'A Victorian cast-iron street lantern', recipe: STREET_LANTERN },
+  { title: 'A mid-engined hypercar with cut wheel arches and a glazed cabin', recipe: SUPERCAR_RECIPE },
 ];
