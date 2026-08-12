@@ -80,7 +80,7 @@ export const TASK_POLICIES: Record<TaskName, TaskPolicy> = {
   // a balanced one — so the same money buys one shot from the best model or a
   // loop of five from a very good one, and the loop wins. Spend on the feedback,
   // not on the single guess.
-  asset_recipe: { tier: 'balanced', maxOutputTokens: 20_000, temperature: 0.55, cacheTtlSeconds: 0, semanticCache: false, description: 'Write a full modelling recipe for a requested 3D asset.' },
+  asset_recipe: { tier: 'balanced', maxOutputTokens: 32_000, temperature: 0.55, cacheTtlSeconds: 0, semanticCache: false, description: 'Write a full modelling recipe for a requested 3D asset.' },
   // Reviewing renders is a judgement call made against fixed criteria, so it
   // runs cold. It is never cached: the whole point is to look at this asset.
   asset_review: { tier: 'balanced', maxOutputTokens: 9000, temperature: 0.05, cacheTtlSeconds: 0, semanticCache: false, description: 'Grade rendered asset views against the brief that specified them.' },

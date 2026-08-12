@@ -69,6 +69,100 @@ function isDeprecatedParameterError(error: unknown, parameter: string): boolean 
   return body.includes(parameter) && (body.includes('deprecated') || body.includes('unsupported') || body.includes('not supported'));
 }
 
+/**
+ * Reassembles a server-sent event stream into the message it describes.
+ *
+ * The streaming API delivers the same message as the buffered one, in pieces:
+ * `message_start` carries the model and the input token count, a series of
+ * `content_block_delta` events carry the text a fragment at a time, and
+ * `message_delta` carries the stop reason and the final output token count.
+ * Collecting them back into one object keeps every caller unaware that anything
+ * changed.
+ */
+function parseEventStream(payload: string): AnthropicResponseBody {
+  // An error is returned as a plain JSON body rather than as a stream.
+  if (!payload.includes('event:') && payload.trim().startsWith('{')) {
+    return JSON.parse(payload) as AnthropicResponseBody;
+  }
+
+  const blocks: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown; partialJson?: string }> = [];
+  let model = '';
+  let stopReason: string | null = null;
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  for (const line of payload.split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue;
+    const data = line.slice(5).trim();
+    if (data === '' || data === '[DONE]') continue;
+
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+
+    switch (event.type) {
+      case 'message_start': {
+        const message = event.message as { model?: string; usage?: { input_tokens?: number } } | undefined;
+        model = message?.model ?? model;
+        inputTokens = message?.usage?.input_tokens ?? inputTokens;
+        break;
+      }
+      case 'content_block_start': {
+        const block = event.content_block as { type?: string; id?: string; name?: string; input?: unknown } | undefined;
+        blocks.push({ type: block?.type ?? 'text', text: '', id: block?.id, name: block?.name, input: block?.input, partialJson: '' });
+        break;
+      }
+      case 'content_block_delta': {
+        const current = blocks[blocks.length - 1];
+        if (!current) break;
+        const delta = event.delta as { type?: string; text?: string; partial_json?: string } | undefined;
+        if (typeof delta?.text === 'string') current.text = (current.text ?? '') + delta.text;
+        // Tool arguments stream as JSON fragments rather than as text.
+        if (typeof delta?.partial_json === 'string') current.partialJson = (current.partialJson ?? '') + delta.partial_json;
+        break;
+      }
+      case 'message_delta': {
+        const delta = event.delta as { stop_reason?: string | null } | undefined;
+        stopReason = delta?.stop_reason ?? stopReason;
+        outputTokens = (event.usage as { output_tokens?: number } | undefined)?.output_tokens ?? outputTokens;
+        break;
+      }
+      case 'error': {
+        const error = event.error as { message?: string } | undefined;
+        throw new Error(error?.message ?? 'the provider reported an error mid-stream');
+      }
+      default:
+        break;
+    }
+  }
+
+  if (blocks.length === 0 && model === '') throw new Error('the response stream carried no message');
+
+  return {
+    content: blocks.map((block) => ({
+      type: block.type,
+      text: block.text,
+      id: block.id,
+      name: block.name,
+      input: block.partialJson ? (safeJson(block.partialJson) ?? block.input) : block.input,
+    })) as AnthropicResponseBody['content'],
+    model,
+    stop_reason: stopReason,
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+  } as AnthropicResponseBody;
+}
+
+function safeJson(text: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export class AnthropicProvider implements LLMProvider {
   readonly name = 'anthropic';
 
@@ -127,6 +221,17 @@ export class AnthropicProvider implements LLMProvider {
       ),
     };
     if (system) body.system = system;
+    // Streamed, always.
+    //
+    // A non-streamed request sends nothing at all until the model has finished
+    // writing, so a large answer looks identical to a hung connection: the HTTP
+    // client's header timeout fires, the caller sees "fetch failed", and the
+    // work has already been done and billed on the other side. Streaming makes
+    // the headers arrive at once and the bytes arrive continuously, which is
+    // also what Anthropic requires for long generations. The stream is still
+    // buffered to completion here — nothing downstream wants it incrementally —
+    // so the only thing that changes is that the connection stays alive.
+    body.stream = true;
     // Newer models reject `temperature` outright rather than ignoring it, and
     // which ones do changes as models are released. Rather than carry a list
     // that goes stale, the provider learns it: the first 400 that names the
@@ -176,9 +281,9 @@ export class AnthropicProvider implements LLMProvider {
 
     let parsed: AnthropicResponseBody;
     try {
-      parsed = JSON.parse(raw.body.toString('utf8')) as AnthropicResponseBody;
-    } catch {
-      throw new ProviderRequestError(this.name, raw.status, 'malformed JSON response', false);
+      parsed = parseEventStream(raw.body.toString('utf8'));
+    } catch (error) {
+      throw new ProviderRequestError(this.name, raw.status, (error as Error).message, false);
     }
     if (!Array.isArray(parsed.content)) {
       const err = parsed as unknown as AnthropicErrorBody;

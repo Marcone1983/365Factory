@@ -76,6 +76,12 @@ responsible. Write it for someone debugging your work.
 
 Steps run in order and may only reference parts built before them.
 
+Most objects are 15 to 40 steps. Reach for more only when the object genuinely
+has that many distinct parts — and remember that an array of forty identical
+railings is one step, not forty. A hundred-step recipe is almost always a sign
+that repeated parts were written out one at a time, and it will not fit in a
+single answer.
+
 Keep each note to one or two sentences — what the part is, and why it has that
 shape. It is a debugging aid, not an essay: a recipe whose notes run to
 paragraphs will not fit in one answer, and an answer that does not fit is

@@ -138,7 +138,7 @@ async function authorRecipe(
       // A recipe carrying a full brief and eighty steps has measured close to
       // 12k tokens on its own, and a JSON answer that runs out of room is
       // unrecoverable rather than repairable.
-      maxOutputTokens: 20_000,
+      maxOutputTokens: 32_000,
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.context ? { context: options.context } : {}),
     });

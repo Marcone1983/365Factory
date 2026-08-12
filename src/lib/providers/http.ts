@@ -1,3 +1,5 @@
+import { Agent } from 'undici';
+
 import { ProviderRequestError } from './types';
 import { createLogger } from '@/lib/observability/logger';
 import { counter, observe } from '@/lib/observability/metrics';
@@ -166,6 +168,18 @@ function backoffDelay(attempt: number, retryAfterHeader: string | null): number 
  * Performs an HTTP request with timeout, exponential backoff with jitter,
  * token-bucket rate limiting and a per-target circuit breaker.
  */
+/**
+ * A dispatcher whose header and body timeouts are disabled.
+ *
+ * Built once and reused: an agent per request leaks sockets and defeats
+ * connection pooling.
+ */
+let longRunningDispatcher: Agent | null = null;
+function longRunningAgent(): Agent {
+  longRunningDispatcher ??= new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+  return longRunningDispatcher;
+}
+
 export async function request(options: RequestOptions): Promise<RawResponse> {
   const {
     url,
@@ -198,7 +212,15 @@ export async function request(options: RequestOptions): Promise<RawResponse> {
         body: body as BodyInit | undefined,
         signal: controller.signal,
         redirect: 'follow',
-      });
+        // Undici gives up after five minutes of waiting for response headers,
+        // and a large non-streamed generation takes longer than that: the model
+        // sends nothing at all until it has finished writing. That timeout is
+        // invisible from here — it surfaces as a bare "fetch failed" — and it
+        // fires after the provider has already done, and billed, the work. The
+        // request's only deadline is the AbortController above, which the caller
+        // configures and which says what it is when it fires.
+        dispatcher: longRunningAgent(),
+      } as RequestInit & { dispatcher: unknown });
       const buffer = Buffer.from(await response.arrayBuffer());
       const ok = response.ok || acceptStatuses?.includes(response.status) === true;
       if (ok) {
