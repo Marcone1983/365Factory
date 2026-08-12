@@ -24,6 +24,22 @@ const args = process.argv.slice(2);
 const OUT = args.find((a) => !a.startsWith('--')) ?? path.resolve('var/showcase');
 /** Renders one subject at a time; three large models at once exhausts memory. */
 const ONLY = args.find((a) => a.startsWith('--only='))?.split('=')[1];
+/**
+ * Renders only the named steps of a recipe, framed on them.
+ *
+ * A fault in a small part of a large asset is invisible in a full-body shot: a
+ * face is forty pixels tall on a standing figure, which is not enough to see
+ * whether the eyes sit in their sockets. Overriding the outputs frames the
+ * camera on the parts under examination at full resolution.
+ *
+ *   npx tsx scripts/render-showcase.ts --only=field_scout_character --parts=head_sockets,lips,eyeballs
+ */
+const PARTS = args
+  .find((a) => a.startsWith('--parts='))
+  ?.split('=')[1]
+  ?.split(',')
+  .map((part) => part.trim())
+  .filter(Boolean);
 const WIDTH = 1280;
 const HEIGHT = 800;
 
@@ -281,12 +297,15 @@ async function main(): Promise<void> {
       process.stdout.write(`building recipe "${example.recipe.name}"…\n`);
       // Each example carries its own palette: a dark-green utility vehicle and a
       // crimson hypercar cannot share one.
-      const palette =
-        example.recipe.name === 'trail_utility_4x4'
-          ? ['#4e7a52', '#2a2f2a', '#aeb8c4', '#0d1116', '#ffe9b8', '#15150f', '#1a1a14']
-          : ['#8c1230', '#ff3355', '#c9d1de', '#101418', '#8892a0', '#555a63', '#17171b'];
-      const built = buildAssetFromRecipe(example.recipe, {
-        palette,
+      // --parts trims the recipe to the steps named, so a detail can be
+      // inspected at full resolution. targetSize is dropped with it: it sizes
+      // the whole asset, and applying it to a fragment would scale a head up to
+      // the height of the figure it came from.
+      const recipe = PARTS
+        ? { ...example.recipe, outputs: PARTS, targetSize: [0, 0, 0] as [number, number, number] }
+        : example.recipe;
+      const built = buildAssetFromRecipe(recipe, {
+        palette: example.palette,
         seed: 4242,
         textureSize: 1024,
       });

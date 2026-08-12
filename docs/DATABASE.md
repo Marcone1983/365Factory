@@ -34,6 +34,7 @@ actually has. Migrations run inside a transaction.
 | `M001` | Core schema — 38 tables |
 | `M002` | FTS5 virtual tables and their sync triggers |
 | `M003` | Error memory, improvement proposals, repair audits |
+| `M004` | Recipe library — authored asset recipes, review rounds, failure modes |
 
 Run them explicitly with `npm run migrate`; the server also migrates at boot.
 
@@ -90,12 +91,28 @@ of what the agent actually consulted.
 
 ### Knowledge and learning
 `knowledge_items` · `embeddings` · `error_memories` · `improvement_proposals` ·
-`repair_audits`
+`repair_audits` · `asset_recipes` · `asset_reviews` · `asset_failure_modes`
 
 `error_memories` is keyed by a normalised signature: paths, positions, hashes,
 quoted identifiers and numbers-with-units are collapsed, so the same *kind* of
 failure is one memory however it presented itself. A verified fix is attached to
 the memory and injected into later repair prompts.
+
+`asset_recipes` is the recipe library. Every asset the factory authors is kept
+as the recipe that built it, keyed by a normalised request and indexed
+semantically, so a second request for the same object is answered by rebuilding
+from JSON in milliseconds instead of by a fresh authoring and review. The recipe
+is stored rather than the GLB: it is two orders of magnitude smaller, it rebuilds
+deterministically for any palette, and a later model can read and adapt it. A run
+that scores worse than the stored recipe does not replace it.
+
+`asset_reviews` keeps every round of the visual review, including the rounds
+that were superseded — those are the record of what the author got wrong before
+it got it right. `asset_failure_modes` counts the acceptance criteria that fail
+across unrelated assets, separating the ones the repair loop recovers from the
+ones it never does; a criterion that keeps failing is a gap in the operator
+kernel rather than one asset's bad luck, and the recurring ones are injected into
+the authoring prompt.
 
 ### Cost and cache
 `cache_entries` · `http_cache` · `api_usage` · `metrics`

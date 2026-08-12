@@ -1,4 +1,4 @@
-import { MATERIAL_FAMILIES } from './schema';
+import { MATERIAL_FAMILIES, type AssetRecipe } from './schema';
 import { RECIPE_EXAMPLES } from './examples';
 
 /**
@@ -99,11 +99,43 @@ RULES THAT ARE NOT NEGOTIABLE
 Return one JSON object and nothing else.`;
 }
 
-/** Few-shot examples, rendered as the model should produce them. */
-export function recipeExamplePrompt(): string {
-  return RECIPE_EXAMPLES.map(
-    (example) => `EXAMPLE — ${example.title}\n\n${JSON.stringify(example.recipe, null, 2)}`,
-  ).join('\n\n');
+export interface LearnedExample {
+  readonly title: string;
+  readonly recipe: AssetRecipe;
+  /** The score the critic gave this recipe when it was built. */
+  readonly score: number;
+}
+
+/**
+ * Few-shot examples, rendered as the model should produce them.
+ *
+ * The first built-in example is always included: it is the operator tour, and
+ * it is what teaches the vocabulary. After that, examples earned by the library
+ * — recipes that were actually built and passed a visual review — are preferred
+ * over the remaining hand-written ones, because they are evidence of what works
+ * in this pipeline rather than of what someone hoped would work.
+ *
+ * The count is capped. Each example is a complete recipe and costs thousands of
+ * tokens; three is enough to establish the form, and beyond that the examples
+ * start crowding out the request.
+ */
+export function recipeExamplePrompt(learned: readonly LearnedExample[] = [], limit = 3): string {
+  const chosen: Array<{ title: string; recipe: AssetRecipe }> = [];
+  const first = RECIPE_EXAMPLES[0];
+  if (first) chosen.push(first);
+
+  for (const example of [...learned].sort((a, b) => b.score - a.score)) {
+    if (chosen.length >= limit) break;
+    chosen.push({ title: `${example.title} (scored ${Math.round(example.score)}/100 in review)`, recipe: example.recipe });
+  }
+  for (const example of RECIPE_EXAMPLES.slice(1)) {
+    if (chosen.length >= limit) break;
+    chosen.push(example);
+  }
+
+  return chosen
+    .map((example) => `EXAMPLE — ${example.title}\n\n${JSON.stringify(example.recipe, null, 2)}`)
+    .join('\n\n');
 }
 
 export interface AssetRequestBrief {

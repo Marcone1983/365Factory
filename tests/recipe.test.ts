@@ -3,7 +3,7 @@ import { AssetRecipeSchema, validateReferences, type AssetRecipe } from '@/lib/g
 import { interpretRecipe, RecipeError } from '@/lib/generation/recipe/interpreter';
 import { buildAssetFromRecipe } from '@/lib/generation/recipe/build';
 import { inspectGlb } from '@/lib/graphics/gltf';
-import { STREET_LANTERN } from '@/lib/generation/recipe/examples';
+import { AVATAR, STREET_LANTERN } from '@/lib/generation/recipe/examples';
 
 /**
  * The recipe is the language the AI writes instead of the platform shipping a
@@ -278,3 +278,93 @@ describe('building a GLB from a recipe', () => {
     expect(built.glb.length).toBeLessThan(24 * 1024 * 1024);
   });
 });
+
+/**
+ * The character is the recipe language's hardest case and the one that decides
+ * whether it is general or just good at boxes. A face has to have features
+ * standing proud of a curved surface, cut sockets, and a mouth made of two
+ * volumes with a gap; a hand has to have fingers that can be counted. These
+ * check that what the recipe claims is actually in the geometry — a feature
+ * placed a few millimetres too far back vanishes inside the skull and nothing
+ * else in the pipeline would notice.
+ */
+describe('the character recipe', () => {
+  const built = interpretRecipe(AVATAR, { seed: 4242 });
+
+  it('builds within the triangle budget', () => {
+    expect(built.triangleCount).toBeGreaterThan(20_000);
+    expect(built.triangleCount).toBeLessThan(400_000);
+    expect(built.warnings).toEqual([]);
+  });
+
+  it('stands 1.78m tall with human width and depth', () => {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const vertex of built.mesh.vertices) {
+      minY = Math.min(minY, vertex.position.y);
+      maxY = Math.max(maxY, vertex.position.y);
+      maxX = Math.max(maxX, vertex.position.x);
+      minZ = Math.min(minZ, vertex.position.z);
+      maxZ = Math.max(maxZ, vertex.position.z);
+    }
+    expect(maxY - minY).toBeCloseTo(1.78, 1);
+    // Shoulders under half a metre across, and the figure deeper than a plank.
+    expect(maxX * 2).toBeGreaterThan(0.4);
+    expect(maxX * 2).toBeLessThan(0.62);
+    expect(maxZ - minZ).toBeGreaterThan(0.2);
+  });
+
+  it('builds every part the brief promises, none of them empty', () => {
+    const byId = new Map(built.stepCosts.map((cost) => [cost.id, cost.faces]));
+    for (const part of ['nose', 'ear', 'eyeball', 'iris', 'lip_upper', 'lip_lower', 'finger_index', 'thumb']) {
+      expect(byId.get(part) ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  it('puts the nose in front of the cheek and the chin in front of the neck', () => {
+    // The whole point of the face: features that do not clear the surface they
+    // sit on are invisible, and this is the check that catches that.
+    const nose = frontmostZ(built.mesh, 0, 1.64, 0.02);
+    const cheek = frontmostZ(built.mesh, 0.05, 1.655, 0.02);
+    expect(nose).toBeGreaterThan(cheek + 0.012);
+
+    const chin = frontmostZ(built.mesh, 0, 1.6, 0.02);
+    const neck = frontmostZ(built.mesh, 0, 1.5, 0.02);
+    expect(chin).toBeGreaterThan(neck);
+  });
+
+  it('counts five separate digits on a hand', () => {
+    // Each finger is swept along its own curve, so below the knuckles they are
+    // separate volumes with air between them. The slice has to be thin: the
+    // fingers curl forward as they descend, so pooling vertices over four
+    // centimetres of height smears one finger's z range over the next one's gap
+    // and four fingers count as one.
+    const zs: number[] = [];
+    for (const vertex of built.mesh.vertices) {
+      const p = vertex.position;
+      if (p.x < 0.19 || p.y > 0.71 || p.y < 0.7) continue;
+      zs.push(p.z);
+    }
+    expect(zs.length).toBeGreaterThan(0);
+    zs.sort((a, b) => a - b);
+    let clusters = 1;
+    for (let i = 1; i < zs.length; i += 1) {
+      if ((zs[i] as number) - (zs[i - 1] as number) > 0.0015) clusters += 1;
+    }
+    expect(clusters).toBeGreaterThanOrEqual(4);
+  });
+});
+
+/** The frontmost surface within `radius` of (x, y) — where a feature has to clear. */
+function frontmostZ(mesh: { vertices: ReadonlyArray<{ position: { x: number; y: number; z: number } }> }, x: number, y: number, radius: number): number {
+  let front = -Infinity;
+  for (const vertex of mesh.vertices) {
+    const p = vertex.position;
+    if (Math.hypot(p.x - x, p.y - y) > radius) continue;
+    if (p.z > front) front = p.z;
+  }
+  return front;
+}

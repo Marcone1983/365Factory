@@ -125,6 +125,16 @@ const EnvSchema = z.object({
   // synthesised by a text-to-3D service and imported as GLB. When absent the
   // platform falls back to its own subdivision-surface generators, which are
   // real geometry, not a placeholder.
+  // The platform's own authored-recipe pipeline: the model writes a brief and a
+  // construction recipe, the interpreter builds it, and a vision critic checks
+  // the render against the brief's acceptance criteria before it is accepted.
+  // It is tried before any external text-to-3D service, because a recipe is
+  // reusable, recolourable, auditable and free on the second request. Disable it
+  // only to isolate a fault; the fallbacks below still produce real geometry.
+  RECIPE_PIPELINE: bool(true),
+  RECIPE_REVIEW_ROUNDS: int(2, 0, 5),
+  RECIPE_PASS_MARK: int(82, 0, 100),
+
   MODEL3D_PROVIDER: z.enum(['none', 'meshy', 'tripo']).default('none'),
   MODEL3D_TIMEOUT_MS: int(900_000, 60_000, 3_600_000),
   MODEL3D_TRIANGLE_BUDGET: int(40_000, 1_000, 500_000),

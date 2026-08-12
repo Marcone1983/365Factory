@@ -10,7 +10,7 @@ import { closeDatabase, db } from '@/lib/db/client';
  * Every suite that touches persistence runs against its own temporary DATA_DIR
  * and its own SQLite file, created by the real migrations. Nothing is stubbed:
  * a test that says the cache persisted a value has genuinely written it to a
- * database that went through M001-M003, so a schema mistake fails a test rather
+ * database that went through every migration, so a schema mistake fails a test rather
  * than surviving until production.
  */
 

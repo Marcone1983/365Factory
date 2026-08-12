@@ -28,7 +28,7 @@ const log = createLogger('generation.review.critic');
  *    instruction rather than a complaint.
  */
 
-const VerdictSchema = z.object({
+export const VerdictSchema = z.object({
   /** One entry per acceptance criterion, in the order they were given. */
   criteria: z
     .array(

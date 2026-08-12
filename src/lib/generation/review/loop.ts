@@ -3,11 +3,21 @@ import { completeJson } from '@/lib/ai/router';
 import { createLogger } from '@/lib/observability/logger';
 import { emitEvent } from '@/lib/observability/events';
 import { recallSimilar, recordFailure, recordFix, renderMemoriesForPrompt } from '@/lib/knowledge/error-memory';
+import {
+  bestVerdictFor,
+  exemplarRecipes,
+  recallRecipe,
+  recordFailureMode,
+  recordReviewRound,
+  rememberRecipe,
+  renderFailureModesForPrompt,
+  topFailureModes,
+} from '@/lib/knowledge/recipe-library';
 import { AssetRecipeSchema, type AssetRecipe } from '../recipe/schema';
 import { buildAssetFromRecipe, type BuiltAsset } from '../recipe/build';
 import { recipeExamplePrompt, recipeRepairPrompt, recipeSystemPrompt, recipeUserPrompt, type AssetRequestBrief } from '../recipe/prompt';
 import { renderForReview, type RenderReviewResult } from './render';
-import { reviewAsset, type AssetVerdict } from './critic';
+import { reviewAsset, VerdictSchema, type AssetVerdict } from './critic';
 
 const log = createLogger('generation.review.loop');
 
@@ -39,6 +49,10 @@ export interface AssetLoopOptions {
   readonly maxRepairs?: number;
   readonly passMark?: number;
   readonly textureSize?: number;
+  /** Groups the asset in the library: 'vehicle', 'character', 'prop', … */
+  readonly category?: string;
+  /** Set false to force a fresh authoring even if the library already answers this. */
+  readonly reuse?: boolean;
   readonly signal?: AbortSignal;
   readonly context?: { projectId?: string; factoryRunId?: string };
 }
@@ -50,7 +64,12 @@ export interface AssetAttempt {
   readonly verdict: AssetVerdict;
   readonly failures: readonly string[];
   readonly accepted: boolean;
-  readonly render: RenderReviewResult;
+  /**
+   * Absent when the asset came from the library: a stored recipe is served with
+   * the verdict it earned when it was first reviewed, and re-rendering it to
+   * produce pictures nobody looks at would spend the time the reuse saved.
+   */
+  readonly render?: RenderReviewResult;
 }
 
 export interface AssetLoopResult {
@@ -60,6 +79,10 @@ export interface AssetLoopResult {
   readonly accepted: boolean;
   readonly rounds: number;
   readonly totalMs: number;
+  /** True when the asset came from the recipe library rather than being authored. */
+  readonly reused: boolean;
+  /** The library row this asset is stored under, when it could be stored. */
+  readonly recipeId: string | null;
 }
 
 /**
@@ -83,8 +106,21 @@ async function authorRecipe(
     });
     const lessons = memories.length > 0 ? `\n\nLESSONS FROM EARLIER FAILURES:\n${renderMemoriesForPrompt(memories)}` : '';
 
+    // The library's own best work, and the mistakes this pipeline keeps making,
+    // both go in front of the request. Together they are what makes the author
+    // better next month than it is today without a line of the prompt changing.
+    const learned = exemplarRecipes({ ...(options.category ? { category: options.category } : {}), limit: 2 }).map(
+      (stored) => ({ title: stored.subject || stored.name, recipe: stored.recipe, score: stored.score }),
+    );
+    const recurring = renderFailureModesForPrompt(topFailureModes(8));
+
     const messages = [
-      { role: 'user' as const, content: `${recipeExamplePrompt()}\n\n---\n\n${recipeUserPrompt(options.request)}${lessons}` },
+      {
+        role: 'user' as const,
+        content:
+          `${recipeExamplePrompt(learned)}\n\n---\n\n${recipeUserPrompt(options.request)}${lessons}` +
+          (recurring ? `\n\n${recurring}` : ''),
+      },
       ...history,
     ];
     if (lastError) {
@@ -136,10 +172,100 @@ async function authorRecipe(
   throw new Error(`the recipe could not be made to build after ${maxBuildRetries} attempts: ${lastError}`);
 }
 
+/**
+ * Serves an asset from the recipe library.
+ *
+ * The stored recipe is rebuilt against *this* caller's palette and seed, so a
+ * reused asset still takes the product's colours; only the shape is reused,
+ * which is the expensive part. The verdict is the one that recipe earned when a
+ * critic actually looked at it — the loop never claims a review it did not run.
+ *
+ * Returns null whenever anything about the stored row cannot be honoured, in
+ * which case the caller authors a fresh recipe. There is no partial reuse.
+ */
+async function serveFromLibrary(options: AssetLoopOptions): Promise<AssetLoopResult | null> {
+  const started = Date.now();
+  const category = options.category ?? 'other';
+
+  let stored;
+  try {
+    stored = await recallRecipe({ request: options.request.request, category });
+  } catch (error) {
+    log.warn('the recipe library could not be consulted; authoring from scratch', {
+      error: (error as Error).message,
+    });
+    return null;
+  }
+  if (!stored) return null;
+
+  const remembered = bestVerdictFor(stored.id);
+  if (!remembered) {
+    log.debug('a stored recipe has no recorded verdict; it will be re-authored rather than served unreviewed', {
+      name: stored.name,
+    });
+    return null;
+  }
+  const verdict = VerdictSchema.safeParse(remembered.verdict);
+  if (!verdict.success) return null;
+
+  let asset: BuiltAsset;
+  try {
+    asset = buildAssetFromRecipe(stored.recipe, {
+      palette: options.palette,
+      ...(options.seed !== undefined ? { seed: options.seed } : { seed: stored.seed }),
+      ...(options.textureSize !== undefined ? { textureSize: options.textureSize } : {}),
+    });
+  } catch (error) {
+    // A recipe that no longer builds is a real regression in the kernel, not a
+    // cache miss to pass over quietly.
+    const message = (error as Error).message;
+    log.warn('a stored recipe no longer builds; authoring a replacement', { name: stored.name, error: message });
+    await recordFailure({
+      category: 'asset',
+      phase: 'generation',
+      message: `stored recipe "${stored.name}" no longer builds: ${message}`,
+    });
+    return null;
+  }
+
+  const attempt: AssetAttempt = {
+    round: remembered.round,
+    recipe: stored.recipe,
+    asset,
+    verdict: verdict.data,
+    failures: remembered.failures,
+    accepted: stored.accepted,
+  };
+
+  emitEvent({
+    type: 'asset.generated',
+    scope: 'generation',
+    message: `reused "${stored.name}" from the recipe library (scored ${Math.round(stored.score)}, matched by ${stored.matchedBy})`,
+    data: { name: stored.name, score: stored.score, matchedBy: stored.matchedBy, reused: true },
+    ...(options.context?.projectId ? { projectId: options.context.projectId } : {}),
+  });
+
+  return {
+    best: attempt,
+    attempts: [attempt],
+    accepted: stored.accepted,
+    rounds: 0,
+    totalMs: Date.now() - started,
+    reused: true,
+    recipeId: stored.id,
+  };
+}
+
 export async function generateReviewedAsset(options: AssetLoopOptions): Promise<AssetLoopResult> {
   const started = Date.now();
   const maxRepairs = Math.max(0, Math.min(5, options.maxRepairs ?? 2));
   const passMark = options.passMark ?? 82;
+  const category = options.category ?? 'other';
+
+  if (options.reuse !== false) {
+    const served = await serveFromLibrary(options);
+    if (served) return served;
+  }
 
   const attempts: AssetAttempt[] = [];
   const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -212,6 +338,13 @@ export async function generateReviewedAsset(options: AssetLoopOptions): Promise<
   const best = attempts.reduce((a, b) => (b.verdict.score > a.verdict.score ? b : a));
   const accepted = best.accepted;
 
+  // Everything the loop learned goes to the library before it returns: the
+  // winning recipe so the next request for this object is free, every round's
+  // verdict so the history survives, and the failed criteria so a criterion that
+  // keeps failing across unrelated assets becomes visible as a gap in the kernel
+  // rather than as one asset's bad luck.
+  const recipeId = await persistToLibrary(options, category, attempts, best, accepted);
+
   log.info('asset loop finished', {
     request: options.request.request.slice(0, 80),
     rounds: attempts.length,
@@ -219,7 +352,93 @@ export async function generateReviewedAsset(options: AssetLoopOptions): Promise<
     accepted,
   });
 
-  return { best, attempts, accepted, rounds: attempts.length, totalMs: Date.now() - started };
+  return {
+    best,
+    attempts,
+    accepted,
+    rounds: attempts.length,
+    totalMs: Date.now() - started,
+    reused: false,
+    recipeId,
+  };
+}
+
+/**
+ * Writes the run to the recipe library.
+ *
+ * Deliberately never throws. A database problem must not destroy an asset that
+ * was successfully generated and reviewed; the caller loses the cache entry, is
+ * told so in the log, and still gets its GLB.
+ */
+async function persistToLibrary(
+  options: AssetLoopOptions,
+  category: string,
+  attempts: readonly AssetAttempt[],
+  best: AssetAttempt,
+  accepted: boolean,
+): Promise<string | null> {
+  try {
+    const recipeId = await rememberRecipe({
+      request: options.request.request,
+      category,
+      recipe: best.recipe,
+      triangleCount: best.asset.triangleCount,
+      score: best.verdict.score,
+      accepted,
+      rounds: attempts.length,
+      glb: best.asset.glb,
+      palette: options.palette,
+      seed: options.seed ?? 0,
+      ...(options.context?.projectId ? { projectId: options.context.projectId } : {}),
+      ...(options.context?.factoryRunId ? { factoryRunId: options.context.factoryRunId } : {}),
+    });
+
+    for (const attempt of attempts) {
+      recordReviewRound({
+        recipeId,
+        round: attempt.round,
+        score: attempt.verdict.score,
+        accepted: attempt.accepted,
+        silhouetteReads: attempt.verdict.silhouetteReads,
+        summary: attempt.verdict.summary,
+        verdict: attempt.verdict,
+        failures: attempt.failures,
+        triangleCount: attempt.asset.triangleCount,
+        viewCount: attempt.render?.views.length ?? 0,
+        durationMs: attempt.asset.stats.durationMs,
+      });
+    }
+
+    // A criterion that failed in one round and passed in a later one is a
+    // mistake the repair loop can fix on its own; one that never recovers is
+    // the interesting kind, and the two are counted separately.
+    const passedLater = new Set<string>();
+    for (const attempt of [...attempts].reverse()) {
+      for (const criterion of attempt.verdict.criteria) {
+        if (criterion.passed) passedLater.add(criterion.criterion);
+      }
+      for (const criterion of attempt.verdict.criteria) {
+        if (criterion.passed) continue;
+        recordFailureMode(criterion.criterion, {
+          category,
+          recovered: passedLater.has(criterion.criterion),
+        });
+      }
+      for (const problem of attempt.verdict.additionalProblems) {
+        if (problem.severity === 'minor') continue;
+        recordFailureMode(problem.problem, {
+          category,
+          ...(problem.step ? { step: problem.step } : {}),
+        });
+      }
+    }
+    return recipeId;
+  } catch (error) {
+    log.error('the asset was generated but could not be stored in the library', {
+      error: (error as Error).message,
+    });
+    return null;
+  }
 }
 
 /** A compact description of what changed between two recipes, for the memory. */

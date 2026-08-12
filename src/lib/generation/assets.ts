@@ -11,6 +11,7 @@ import { coverResizePng, resizePng, roundedMaskPng } from '@/lib/graphics/image-
 import { inspectGlb, writeGlb } from '@/lib/graphics/gltf';
 import { generateMesh, type MeshArchetype } from './meshes';
 import { generateModel, type ModelKind } from './models/catalog';
+import { generateReviewedAsset } from './review/loop';
 import { createLogger } from '@/lib/observability/logger';
 import { emitEvent } from '@/lib/observability/events';
 import type { BrandIdentity } from './scaffold';
@@ -348,6 +349,125 @@ export interface MeshBrief {
   readonly prompt?: string;
 }
 
+/** How a mesh brief is filed in the recipe library, so like is compared with like. */
+function recipeCategory(archetype: string): string {
+  const kind = HIGH_FIDELITY[archetype];
+  if (kind === 'character') return 'character';
+  if (kind === 'vehicle') return 'vehicle';
+  if (kind === 'weapon') return 'weapon';
+  if (kind === 'track') return 'track';
+  return archetype === 'building' || archetype === 'prop' ? archetype : 'prop';
+}
+
+interface AuthoredMesh {
+  readonly glb: Buffer;
+  readonly generator: string;
+  readonly accepted: boolean;
+  readonly validation: Record<string, unknown>;
+}
+
+/**
+ * Runs the authored-recipe pipeline for one mesh brief.
+ *
+ * Returns null rather than throwing whenever the pipeline cannot deliver, so
+ * the caller falls through to the next real path. Two distinct reasons produce
+ * a null and both are logged as what they are: the pipeline was unavailable
+ * (no model configured, no browser to render with, a build that never
+ * succeeded), or it produced something its own critic rejected while a
+ * specialised generator exists for this archetype and will do better.
+ */
+async function generateAuthoredMesh(
+  project: Project,
+  brief: MeshBrief,
+  palette: readonly string[],
+  seed: number,
+): Promise<AuthoredMesh | null> {
+  const started = Date.now();
+  const category = recipeCategory(brief.archetype as string);
+  const cfg = config();
+
+  try {
+    const result = await generateReviewedAsset({
+      request: {
+        request: brief.prompt as string,
+        productContext: project.name,
+        usage: `${brief.archetype} asset for ${project.name}`,
+        palette,
+      },
+      palette,
+      seed,
+      category,
+      maxRepairs: cfg.RECIPE_REVIEW_ROUNDS,
+      passMark: cfg.RECIPE_PASS_MARK,
+      context: { projectId: project.id },
+    });
+
+    const { best } = result;
+    const validation: Record<string, unknown> = {
+      ...inspectGlb(best.asset.glb),
+      recipeId: result.recipeId,
+      recipeName: best.recipe.name,
+      reviewScore: best.verdict.score,
+      reviewSummary: best.verdict.summary,
+      reviewRounds: result.rounds,
+      reusedFromLibrary: result.reused,
+      accepted: result.accepted,
+      failedCriteria: best.verdict.criteria.filter((entry) => !entry.passed).map((entry) => entry.criterion),
+      steps: best.recipe.steps.length,
+      warnings: best.asset.warnings,
+    };
+
+    recordGeneration(
+      project,
+      `recipe:${category}`,
+      'internal',
+      'recipe-interpreter',
+      result.accepted ? 'succeeded' : 'failed',
+      0,
+      Date.now() - started,
+      result.accepted ? null : `the critic scored it ${Math.round(best.verdict.score)}, below the pass mark`,
+    );
+
+    // A rejected asset is not shipped when a specialised generator exists for
+    // this archetype: that generator is known to produce a correct shape, and
+    // handing over something the critic said does not read as the requested
+    // object would be shipping a failure quietly.
+    if (!result.accepted && HIGH_FIDELITY[brief.archetype as string]) {
+      log.warn('the authored recipe did not pass review; falling through to the specialised generator', {
+        asset: brief.name,
+        score: best.verdict.score,
+        failures: best.failures.slice(0, 3),
+      });
+      return null;
+    }
+
+    emitEvent({
+      type: 'asset.generated',
+      scope: 'generation',
+      message:
+        `authored "${best.recipe.name}" from a recipe — scored ${Math.round(best.verdict.score)}/100` +
+        (result.reused ? ' (reused from the library)' : ` after ${result.rounds} round(s)`),
+      data: { asset: brief.name, score: best.verdict.score, reused: result.reused },
+      projectId: project.id,
+    });
+
+    return {
+      glb: best.asset.glb,
+      generator: result.reused ? 'recipe:library' : 'recipe:authored',
+      accepted: result.accepted,
+      validation,
+    };
+  } catch (error) {
+    const message = (error as Error).message;
+    recordGeneration(project, `recipe:${category}`, 'internal', 'recipe-interpreter', 'failed', 0, Date.now() - started, message);
+    log.warn('the authored-recipe pipeline is unavailable for this asset; trying the next path', {
+      asset: brief.name,
+      error: message,
+    });
+    return null;
+  }
+}
+
 /**
  * Generates 3D assets.
  *
@@ -377,7 +497,36 @@ export async function generateMeshAssets(
     let generator: string;
     let validation: Record<string, unknown>;
 
-    // Preferred path: ask a generative-3D service for the asset. The coding
+    // First choice: the platform's own authored-recipe pipeline. A model writes
+    // the brief and the construction, the interpreter builds it, and a vision
+    // critic checks the render against the brief before it is accepted. It is
+    // preferred over an external service because the result is inspectable,
+    // recolourable, stored as a few kilobytes of reusable JSON, and free the
+    // second time it is asked for.
+    if (config().RECIPE_PIPELINE && brief.prompt) {
+      const authored = await generateAuthoredMesh(project, brief, palette, modelSeed);
+      if (authored) {
+        assets.write(relativePath, authored.glb);
+        out.push(
+          persist(project, {
+            kind: 'mesh',
+            name: brief.name,
+            path: relativePath,
+            mime: 'model/gltf-binary',
+            width: 0,
+            height: 0,
+            bytes: authored.glb.length,
+            sha256: crypto.createHash('sha256').update(authored.glb).digest('hex'),
+            generator: authored.generator,
+            validated: authored.accepted,
+            validation: authored.validation,
+          }),
+        );
+        continue;
+      }
+    }
+
+    // Second choice: ask a generative-3D service for the asset. The coding
     // agent describes what it needs, the service synthesises it, and the GLB is
     // validated before it is accepted. On any failure the platform falls through
     // to its own subdivision generators rather than shipping nothing.

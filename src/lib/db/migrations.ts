@@ -729,8 +729,101 @@ CREATE TABLE repair_audits (
 CREATE INDEX idx_repair_audits_project ON repair_audits(project_id, created_at DESC);
 `;
 
+const M004 = `
+-- The recipe library.
+--
+-- Every asset the factory authors is a piece of expensive, hard-won knowledge:
+-- a model spent tokens working out how a lantern is proportioned, the
+-- interpreter proved the geometry builds, and a vision critic confirmed by
+-- looking that it reads as the thing that was asked for. Discarding that after
+-- the GLB is written means paying for it again tomorrow.
+--
+-- The recipe is stored rather than the GLB. A recipe is a few kilobytes of JSON
+-- that rebuilds to a byte-identical mesh in milliseconds for any palette and
+-- seed, so keeping it is cheaper than keeping the binary and strictly more
+-- useful: it can be reused verbatim, recoloured, adapted by a later model as a
+-- starting point, or shown as a worked example of a category that scored well.
+CREATE TABLE asset_recipes (
+  id             TEXT PRIMARY KEY,
+  -- Hash of the normalised request text; the exact-hit key for reuse.
+  request_hash   TEXT NOT NULL,
+  request        TEXT NOT NULL,
+  category       TEXT NOT NULL DEFAULT 'other',
+  name           TEXT NOT NULL,
+  subject        TEXT NOT NULL DEFAULT '',
+  brief          TEXT NOT NULL DEFAULT '{}',
+  recipe         TEXT NOT NULL,
+  step_count     INTEGER NOT NULL DEFAULT 0,
+  triangle_count INTEGER NOT NULL DEFAULT 0,
+  -- The critic's score for the best build of this recipe, 0-100.
+  score          REAL NOT NULL DEFAULT 0,
+  accepted       INTEGER NOT NULL DEFAULT 0,
+  rounds         INTEGER NOT NULL DEFAULT 1,
+  -- Identity of the mesh this recipe produced under the recorded palette/seed,
+  -- so a rebuild that no longer matches is detectable rather than silent.
+  glb_sha256     TEXT NOT NULL DEFAULT '',
+  glb_bytes      INTEGER NOT NULL DEFAULT 0,
+  palette        TEXT NOT NULL DEFAULT '[]',
+  seed           INTEGER NOT NULL DEFAULT 0,
+  embedding_id   TEXT,
+  reuse_count    INTEGER NOT NULL DEFAULT 0,
+  project_id     TEXT,
+  factory_run_id TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  UNIQUE (request_hash)
+);
+CREATE INDEX idx_asset_recipes_quality ON asset_recipes(accepted DESC, score DESC);
+CREATE INDEX idx_asset_recipes_category ON asset_recipes(category, score DESC);
+CREATE INDEX idx_asset_recipes_reuse ON asset_recipes(reuse_count DESC);
+
+-- One row per review round, kept even for rounds that were later superseded.
+-- The superseded rounds are the valuable ones: they are the record of what the
+-- author got wrong before it got it right, which is what the failure-mode
+-- statistics are computed from and what the self-improvement loop reads.
+CREATE TABLE asset_reviews (
+  id             TEXT PRIMARY KEY,
+  recipe_id      TEXT NOT NULL REFERENCES asset_recipes(id) ON DELETE CASCADE,
+  round          INTEGER NOT NULL,
+  score          REAL NOT NULL DEFAULT 0,
+  accepted       INTEGER NOT NULL DEFAULT 0,
+  silhouette_ok  INTEGER NOT NULL DEFAULT 0,
+  summary        TEXT NOT NULL DEFAULT '',
+  -- The critic's full verdict, criterion by criterion. Stored whole because a
+  -- reused recipe is served with the verdict that earned it rather than with a
+  -- fresh review, and a summary line cannot stand in for that.
+  verdict        TEXT NOT NULL DEFAULT '{}',
+  failures       TEXT NOT NULL DEFAULT '[]',
+  triangle_count INTEGER NOT NULL DEFAULT 0,
+  view_count     INTEGER NOT NULL DEFAULT 0,
+  duration_ms    INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX idx_asset_reviews_recipe ON asset_reviews(recipe_id, round);
+CREATE INDEX idx_asset_reviews_recent ON asset_reviews(created_at DESC);
+
+-- Acceptance criteria that fail across many different assets. A criterion that
+-- keeps failing is not a fact about one lantern, it is a gap in the operator
+-- kernel or in the authoring prompt, and that is a change to this codebase
+-- rather than to any single recipe.
+CREATE TABLE asset_failure_modes (
+  id           TEXT PRIMARY KEY,
+  signature    TEXT NOT NULL,
+  criterion    TEXT NOT NULL,
+  category     TEXT NOT NULL DEFAULT 'other',
+  occurrences  INTEGER NOT NULL DEFAULT 1,
+  recoveries   INTEGER NOT NULL DEFAULT 0,
+  last_step    TEXT NOT NULL DEFAULT '',
+  first_seen_at TEXT NOT NULL,
+  last_seen_at  TEXT NOT NULL,
+  UNIQUE (signature)
+);
+CREATE INDEX idx_asset_failure_modes_rank ON asset_failure_modes(occurrences DESC);
+`;
+
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: 'initial_schema', sql: M001 },
   { version: 2, name: 'full_text_search', sql: M002 },
   { version: 3, name: 'error_memory_and_self_improvement', sql: M003 },
+  { version: 4, name: 'recipe_library', sql: M004 },
 ];

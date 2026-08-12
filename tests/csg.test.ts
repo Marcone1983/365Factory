@@ -211,3 +211,74 @@ describe('robustness', () => {
     }
   });
 });
+
+/**
+ * Polygons out of reach of the other solid are kept out of the BSP entirely.
+ * That is a large win — it is the difference between a face costing 84,000
+ * polygons and 13,000 — and it is only safe if the answer is unchanged. These
+ * check the properties the culling must not break: the volume, the closure of
+ * the surface, and the geometry far from the cut.
+ */
+describe('bounding-box culling', () => {
+  it('gives the same volume as the cut it replaces, for a tool far smaller than the base', () => {
+    const base = box(v3(0, 0, 0), v3(2, 2, 2));
+    // A tool in one corner: most of the base is nowhere near it, which is
+    // exactly the case the culling exists for.
+    const tool = box(v3(0.9, 0.9, 0.9), v3(0.4, 0.4, 0.4));
+    const result = subtract(base, tool);
+    // 8 minus the corner of the tool that lies inside the base: the tool spans
+    // 0.7 to 1.1 on each axis and the base ends at 1.0, so 0.3³ is removed.
+    expect(signedVolume(result)).toBeCloseTo(8 - 0.3 * 0.3 * 0.3, 4);
+    expect(openEdges(result)).toBe(0);
+  });
+
+  it('leaves the far side of the base geometrically untouched', () => {
+    const base = box(v3(0, 0, 0), v3(4, 1, 1));
+    const tool = sphere(v3(1.9, 0, 0), 0.3, 16, 8);
+    const result = subtract(base, tool);
+
+    // No vertex introduced behind x = 0: the cut is at the far end, and a
+    // polygon there has no business being split.
+    const introduced = result.vertices.filter((vertex) => vertex.position.x < -0.001);
+    for (const vertex of introduced) {
+      expect(Math.abs(Math.abs(vertex.position.x) - 2)).toBeLessThan(1e-6);
+    }
+    expect(openEdges(result)).toBe(0);
+  });
+
+  it('unions disjoint solids without running the BSP at all', () => {
+    const a = box(v3(0, 0, 0), v3(1, 1, 1));
+    const b = box(v3(10, 0, 0), v3(1, 1, 1));
+    const result = union(a, b);
+    expect(signedVolume(result)).toBeCloseTo(2, 6);
+    // No polygon was split, so no vertex was introduced. Counting vertices
+    // rather than faces states that directly: the boolean path always fans
+    // faces into triangles, so a face count says nothing about splitting.
+    expect(result.vertices.length).toBe(a.vertices.length + b.vertices.length);
+  });
+
+  it('subtracts a distant tool by returning the base unchanged', () => {
+    const base = sphere(v3(0, 0, 0), 1, 20, 10);
+    const result = subtract(base, box(v3(9, 9, 9), v3(1, 1, 1)));
+    // Splitting only ever adds vertices, and the weld in the rebuild only ever
+    // removes them (a sphere's pole is one point held by many triangles), so
+    // "no more than the input" is the assertion that catches a stray split.
+    expect(result.vertices.length).toBeLessThanOrEqual(base.vertices.length);
+    expect(signedVolume(result)).toBeCloseTo(signedVolume(base), 6);
+  });
+
+  it('still handles a tool wholly enclosed by the base, where culling cannot decide', () => {
+    // The base's *surface* is nowhere near the tool while its *volume* contains
+    // it, so the cheap test cannot answer and the full BSP has to run.
+    const base = box(v3(0, 0, 0), v3(4, 4, 4));
+    const cavity = box(v3(0, 0, 0), v3(1, 1, 1));
+    const result = subtract(base, cavity);
+    expect(signedVolume(result)).toBeCloseTo(64 - 1, 4);
+  });
+
+  it('intersects correctly when most of each solid is out of reach of the other', () => {
+    const a = box(v3(0, 0, 0), v3(6, 1, 1));
+    const b = box(v3(0, 0, 0), v3(1, 6, 1));
+    expect(signedVolume(intersect(a, b))).toBeCloseTo(1, 5);
+  });
+});

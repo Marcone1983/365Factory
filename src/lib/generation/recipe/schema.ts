@@ -336,8 +336,13 @@ const BriefSchema = z.object({
   silhouette: z.string().min(16).max(900),
   /** Real-world proportion anchors: what is how many times what. */
   proportions: z.array(z.string().min(6).max(200)).min(1).max(12),
-  /** Surface finish, wear, age, how light should behave on it. */
-  surfaceNotes: z.string().min(12).max(400),
+  /**
+   * Surface finish, wear, age, how light should behave on it. An object made of
+   * one material needs a sentence; a character made of skin, eyes, hair, fabric
+   * and leather needs to say how light behaves on each, so the ceiling is
+   * generous while the floor stays strict.
+   */
+  surfaceNotes: z.string().min(12).max(700),
   /** Mistakes typical of this object that the recipe must not make. */
   avoid: z.array(z.string().min(6).max(200)).min(1).max(12),
   /**

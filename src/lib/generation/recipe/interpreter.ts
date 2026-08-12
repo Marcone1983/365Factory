@@ -57,6 +57,21 @@ export class RecipeError extends Error {
   }
 }
 
+/**
+ * What one step cost, before subdivision.
+ *
+ * A recipe that breaches the triangle budget has to be told *which* step to
+ * economise on, or the only available repair is to lower smoothness globally
+ * and lose the quality everywhere. Booleans in particular are unpredictable:
+ * a cut through a dense surface can multiply the face count, and this is what
+ * makes that visible instead of a mystery.
+ */
+export interface StepCost {
+  readonly id: string;
+  readonly op: string;
+  readonly faces: number;
+}
+
 export interface InterpretResult {
   readonly mesh: PolyMesh;
   readonly triangulated: ReturnType<typeof triangulate>;
@@ -64,6 +79,7 @@ export interface InterpretResult {
   readonly materialOrder: readonly string[];
   readonly triangleCount: number;
   readonly warnings: readonly string[];
+  readonly stepCosts: readonly StepCost[];
   readonly stats: {
     readonly steps: number;
     readonly vertices: number;
@@ -359,10 +375,12 @@ export function interpretRecipe(recipe: AssetRecipe, options: { seed?: number } 
 
   const parts = new Map<string, PolyMesh>();
   const warnings: string[] = [];
+  const stepCosts: StepCost[] = [];
   const seed = options.seed ?? 0;
 
   for (const step of recipe.steps) {
     const mesh = runStep(step, parts, slotOf, seed);
+    stepCosts.push({ id: step.id, op: step.op, faces: mesh.faces.length });
     if (mesh.vertices.length === 0) {
       warnings.push(`step "${step.id}" produced no geometry`);
     }
@@ -393,8 +411,17 @@ export function interpretRecipe(recipe: AssetRecipe, options: { seed?: number } 
   const triangleCount = triangulated.indices.length / 3;
 
   if (triangleCount > MAX_TRIANGLES) {
+    // Name the steps that actually cost the budget. "Reduce segment counts" with
+    // no target is advice the author cannot act on when eighty steps are in play.
+    const worst = [...stepCosts]
+      .sort((a, b) => b.faces - a.faces)
+      .slice(0, 5)
+      .map((cost) => `"${cost.id}" (${cost.op}, ${cost.faces} faces)`)
+      .join(', ');
     throw new RecipeError(
-      `the recipe produced ${Math.round(triangleCount)} triangles, over the ${MAX_TRIANGLES} budget; lower smoothness or reduce segment counts`,
+      `the recipe produced ${Math.round(triangleCount)} triangles, over the ${MAX_TRIANGLES} budget; ` +
+        `the most expensive steps are ${worst}. Lower smoothness, reduce their segment counts, ` +
+        `or replace a boolean on a dense surface with a merge.`,
     );
   }
 
@@ -404,6 +431,7 @@ export function interpretRecipe(recipe: AssetRecipe, options: { seed?: number } 
     materialOrder,
     triangleCount,
     warnings,
+    stepCosts,
     stats: {
       steps: recipe.steps.length,
       vertices: smoothed.vertices.length,

@@ -175,13 +175,44 @@ export const STREET_LANTERN: AssetRecipe = AssetRecipeSchema.parse({
 
 export { SUPERCAR } from './supercar';
 export { JEEP } from './jeep';
+export { AVATAR, AVATAR_PALETTE } from './avatar';
 
 // Imported after STREET_LANTERN so the simpler example is read first.
 import { SUPERCAR as SUPERCAR_RECIPE } from './supercar';
 import { JEEP as JEEP_RECIPE } from './jeep';
+import { AVATAR as AVATAR_RECIPE, AVATAR_PALETTE as AVATAR_COLOURS } from './avatar';
 
-export const RECIPE_EXAMPLES: ReadonlyArray<{ readonly title: string; readonly recipe: AssetRecipe }> = [
-  { title: 'A Victorian cast-iron street lantern', recipe: STREET_LANTERN },
-  { title: 'A mid-engined hypercar with cut wheel arches and a glazed cabin', recipe: SUPERCAR_RECIPE },
-  { title: 'A boxy dark-green off-road utility 4x4', recipe: JEEP_RECIPE },
+export interface RecipeExample {
+  readonly title: string;
+  readonly recipe: AssetRecipe;
+  /**
+   * The colours this example is authored against. A recipe never hardcodes a
+   * colour — it indexes a palette — so an example without one would be built in
+   * whatever colours the caller happened to have, and a dark-green utility 4x4
+   * would arrive crimson.
+   */
+  readonly palette: readonly string[];
+}
+
+export const RECIPE_EXAMPLES: readonly RecipeExample[] = [
+  {
+    title: 'A Victorian cast-iron street lantern',
+    recipe: STREET_LANTERN,
+    palette: ['#12151a', '#1b1f26', '#cfe3ef', '#ffd79a', '#8892a0'],
+  },
+  {
+    title: 'A mid-engined hypercar with cut wheel arches and a glazed cabin',
+    recipe: SUPERCAR_RECIPE,
+    palette: ['#8c1230', '#ff3355', '#c9d1de', '#101418', '#8892a0', '#555a63', '#17171b'],
+  },
+  {
+    title: 'A boxy dark-green off-road utility 4x4',
+    recipe: JEEP_RECIPE,
+    palette: ['#4e7a52', '#2a2f2a', '#aeb8c4', '#0d1116', '#ffe9b8', '#15150f', '#1a1a14'],
+  },
+  {
+    title: 'A human character with a modelled face and five-fingered hands',
+    recipe: AVATAR_RECIPE,
+    palette: AVATAR_COLOURS,
+  },
 ];
