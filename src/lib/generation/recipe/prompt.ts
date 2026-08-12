@@ -93,6 +93,13 @@ RULES THAT ARE NOT NEGOTIABLE
   ${MATERIAL_FAMILIES.join(', ')}.
 - smoothness is 0, 1 or 2. Cost is roughly 4x per level. Use 2 only for a hero
   asset the player inspects closely.
+- edgeSharpness is the single most important setting on a manufactured object.
+  At 0 every edge melts under subdivision and the asset reads as CG whatever its
+  materials are; around 0.8 the edges survive as small radii that catch a thin
+  highlight, which is what a pressed panel or a machined block actually does. Set
+  it for vehicles, weapons, architecture, furniture, machinery. Leave it at 0 for
+  anything organic — a face, a creature, a plant — where there are no intended
+  edges to keep.
 - Keep the whole asset under 400,000 triangles. Objects made of many small
   repeated parts (foliage, chains, crowds) reach this far faster than you expect.
 

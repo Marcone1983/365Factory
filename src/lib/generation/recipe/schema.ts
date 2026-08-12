@@ -409,6 +409,19 @@ export const AssetRecipeSchema = z.object({
    * dissolves it while leaving edges sharper than `relaxPreserveAngleDegrees`
    * alone. Leave at 0 for hard-surface assets, where every crease is intended.
    */
+  /**
+   * How much of the model's own edges survive subdivision, 0 to 1.
+   *
+   * At 0 every edge is smooth and a bonnet shut-line melts into a swell. Above
+   * 0 the edges sharper than `edgeAngleDegrees` are creased *semi*-sharply, so
+   * subdivision rounds them over a small radius instead of erasing them — which
+   * is what a real pressed or machined edge does, and the thin highlight along
+   * that radius is most of how the eye reads a manufactured form. Around 0.8
+   * for vehicles, weapons and architecture; 0 for anything organic, where there
+   * are no intended edges at all.
+   */
+  edgeSharpness: finite(0, 1).default(0),
+  edgeAngleDegrees: finite(5, 175).default(35),
   relax: z.number().int().min(0).max(4).default(0),
   relaxPreserveAngleDegrees: finite(5, 175).default(42),
   /** Angle above which an edge stays hard when normals are computed. */

@@ -1,5 +1,6 @@
 import {
   PolyMesh,
+  autoCrease,
   ellipseProfile,
   projectBoxUvs,
   projectCylindricalUvs,
@@ -436,7 +437,14 @@ export function interpretRecipe(recipe: AssetRecipe, options: { seed?: number } 
     recipe.relax > 0
       ? relax(assembled, { iterations: recipe.relax, preserveAngleDegrees: recipe.relaxPreserveAngleDegrees })
       : assembled;
-  const smoothed = subdivide(relaxed, recipe.smoothness);
+
+  // Creasing happens between relaxation and subdivision: it has to see the final
+  // control mesh, and it only means anything to the subdivision that follows.
+  const creased =
+    recipe.edgeSharpness > 0
+      ? autoCrease(relaxed, { angleDegrees: recipe.edgeAngleDegrees, weight: recipe.edgeSharpness })
+      : relaxed;
+  const smoothed = subdivide(creased, recipe.smoothness);
   const triangulated = triangulate(smoothed, { smoothAngleDegrees: recipe.smoothAngleDegrees });
   const triangleCount = triangulated.indices.length / 3;
 

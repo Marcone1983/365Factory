@@ -73,6 +73,8 @@ export const JEEP: AssetRecipe = AssetRecipeSchema.parse({
 
   targetSize: [1.9, 1.95, 3.9],
   smoothness: 1,
+  edgeSharpness: 0.82,
+  edgeAngleDegrees: 32,
   smoothAngleDegrees: 32,
   uvProjection: 'box',
   uvScale: 0.4,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PolyMesh,
+  autoCrease,
   decimate,
   ellipseProfile,
   extrude,
@@ -13,6 +14,7 @@ import {
   triangulate,
   v3,
 } from '@/lib/graphics/mesh-kernel';
+import { box, sphere } from '@/lib/graphics/csg';
 
 /**
  * The mesh kernel is what separates a generated car from a box with wheels. Its
@@ -231,5 +233,46 @@ describe('decimation', () => {
     // The bounding radius must survive: an LOD that shrinks the model would pop
     // visibly as the camera crosses the switch distance.
     expect(maxRadius(lod)).toBeGreaterThan(maxRadius(dense) * 0.75);
+  });
+});
+
+/**
+ * Semi-sharp creasing is what makes hard-surface geometry read as a
+ * manufactured object rather than as CG. Subdivision offers only two wrong
+ * answers on its own — melt the edge, or keep it mathematically sharp and
+ * catching no highlight — and the fractional weight is the third.
+ */
+describe('automatic creasing', () => {
+  function cubeCorner(mesh: PolyMesh): number {
+    // How far the corner of a unit cube survives subdivision: 0.5 is untouched,
+    // and the more the edge melts the smaller it gets.
+    let furthest = 0;
+    for (const vertex of subdivide(mesh, 2).vertices) {
+      furthest = Math.max(furthest, Math.min(Math.abs(vertex.position.x), Math.abs(vertex.position.y), Math.abs(vertex.position.z)));
+    }
+    return furthest;
+  }
+
+  it('keeps an edge that subdivision would otherwise melt', () => {
+    const plain = box(v3(0, 0, 0), v3(1, 1, 1));
+    const creased = autoCrease(plain, { angleDegrees: 35, weight: 0.85 });
+    expect(cubeCorner(creased)).toBeGreaterThan(cubeCorner(plain) + 0.02);
+  });
+
+  it('rounds it rather than leaving it razor sharp', () => {
+    const semi = autoCrease(box(v3(0, 0, 0), v3(1, 1, 1)), { angleDegrees: 35, weight: 0.7 });
+    const full = autoCrease(box(v3(0, 0, 0), v3(1, 1, 1)), { angleDegrees: 35, weight: 1 });
+    expect(cubeCorner(semi)).toBeLessThan(cubeCorner(full));
+  });
+
+  it('leaves a smooth surface alone, because it has no edges to keep', () => {
+    const ball = sphere(v3(0, 0, 0), 1, 24, 12);
+    const creased = autoCrease(ball, { angleDegrees: 35, weight: 0.85 });
+    expect(creased.creases.size).toBe(0);
+  });
+
+  it('does nothing at all at zero weight', () => {
+    const plain = box(v3(0, 0, 0), v3(1, 1, 1));
+    expect(autoCrease(plain, { weight: 0 }).creases.size).toBe(0);
   });
 });

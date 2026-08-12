@@ -835,6 +835,69 @@ export function projectCylindricalUvs(mesh: PolyMesh, repeatY = 1): void {
 }
 
 /** Triplanar-style box projection: no seams to author, good for hard surfaces. */
+export interface AutoCreaseOptions {
+  /** Edges meeting at more than this angle are treated as intended edges. */
+  readonly angleDegrees?: number;
+  /**
+   * How much of the edge survives subdivision, 0 to 1. Below 1 the edge is
+   * *semi-sharp*: subdivision rounds it over a radius that shrinks with the
+   * weight instead of either melting it into the surface or leaving it razor
+   * sharp.
+   */
+  readonly weight?: number;
+}
+
+/**
+ * Marks the model's real edges as semi-sharp creases.
+ *
+ * This is the difference between hard-surface geometry that reads as a
+ * manufactured object and hard-surface geometry that reads as CG, and it has
+ * nothing to do with resolution. No edge in the physical world is perfectly
+ * sharp: a pressed panel, a machined block, a moulded bumper all carry a radius
+ * of a fraction of a millimetre, and that radius catches a thin bright line
+ * along every edge. The eye reads form from those lines. Take them away and the
+ * object looks like untextured CAD however good its materials are.
+ *
+ * Subdivision on its own offers only the two wrong answers. Left alone it treats
+ * every edge as smooth and melts a bonnet shut-line into a soft swell; creased
+ * at full weight it keeps the edge mathematically sharp, which catches no
+ * highlight at all. A fractional weight is the third answer: the edge stays
+ * where it was and rounds over a controlled radius, which is what a bevel is.
+ *
+ * Only manifold edges are considered. An edge used by one face is a border and
+ * an edge used by three is a defect, and creasing either produces a pucker.
+ */
+export function autoCrease(mesh: PolyMesh, options: AutoCreaseOptions = {}): PolyMesh {
+  const threshold = Math.cos(((options.angleDegrees ?? 35) * Math.PI) / 180);
+  const weight = Math.max(0, Math.min(1, options.weight ?? 0.8));
+  if (weight <= 0) return mesh;
+
+  const out = mesh.clone();
+  const normals = out.faces.map((face) => faceNormal(out, face));
+  const edgeFaces = new Map<string, number[]>();
+
+  out.faces.forEach((face, faceIndex) => {
+    for (let i = 0; i < face.vertices.length; i += 1) {
+      const a = face.vertices[i] as number;
+      const b = face.vertices[(i + 1) % face.vertices.length] as number;
+      const key = PolyMesh.edgeKey(a, b);
+      const list = edgeFaces.get(key);
+      if (list) list.push(faceIndex);
+      else edgeFaces.set(key, [faceIndex]);
+    }
+  });
+
+  for (const [key, faces] of edgeFaces) {
+    if (faces.length !== 2) continue;
+    const first = normals[faces[0] as number] as Vec3;
+    const second = normals[faces[1] as number] as Vec3;
+    if (dot(first, second) >= threshold) continue;
+    const [a, b] = key.split(':').map(Number);
+    out.crease(a as number, b as number, weight);
+  }
+  return out;
+}
+
 export interface SculptBrush {
   /** Centre of influence. */
   readonly at: Vec3;

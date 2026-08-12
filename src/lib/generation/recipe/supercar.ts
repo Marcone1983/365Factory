@@ -76,6 +76,8 @@ export const SUPERCAR: AssetRecipe = AssetRecipeSchema.parse({
 
   targetSize: [2.02, 1.15, 4.6],
   smoothness: 1,
+  edgeSharpness: 0.72,
+  edgeAngleDegrees: 34,
   smoothAngleDegrees: 52,
   uvProjection: 'box',
   uvScale: 0.35,
