@@ -232,19 +232,22 @@ export function recipeRepairPrompt(failures: readonly string[], recipe: AssetRec
 
 ${failures.map((failure, index) => `${index + 1}. ${failure}`).join('\n')}
 
-These are the steps you wrote, in order:
+These are the steps you wrote, in order, exactly as they were built:
 
-${recipe.steps.map((step) => `  ${step.id} (${step.op}): ${step.note}`).join('\n')}
+${JSON.stringify(recipe.steps, null, 1)}
 
 Fix the geometry that is actually responsible. The observations name the step to
-blame; the notes above say what each step was for.
+blame; the notes say what each step was for.
 
 Return a PATCH, not a new recipe. Send back only what changes:
 
   reasoning       one or two sentences on why these changes answer the failures
   replaceSteps    complete replacement steps. A step whose id already exists
                   replaces it; a new id is appended to the end. Send the whole
-                  step, not a fragment of one.
+                  step in the same shape it appears above — its op, and every
+                  field that op requires. A step sent as a fragment, or with a
+                  loft section written as a number instead of [x, y, z], is
+                  rejected and the whole patch is asked for again.
   removeStepIds   ids to delete outright
   outputs         only if the change alters which parts form the finished asset
   targetSize, edgeSharpness, smoothness, smoothAngleDegrees — only if wrong
