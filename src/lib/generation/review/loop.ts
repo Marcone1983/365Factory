@@ -135,7 +135,10 @@ async function authorRecipe(
       system: recipeSystemPrompt(),
       schema: AssetRecipeSchema as unknown as z.ZodType<AssetRecipe, z.ZodTypeDef, unknown>,
       messages,
-      maxOutputTokens: 12_000,
+      // A recipe carrying a full brief and eighty steps has measured close to
+      // 12k tokens on its own, and a JSON answer that runs out of room is
+      // unrecoverable rather than repairable.
+      maxOutputTokens: 20_000,
       ...(options.signal ? { signal: options.signal } : {}),
       ...(options.context ? { context: options.context } : {}),
     });

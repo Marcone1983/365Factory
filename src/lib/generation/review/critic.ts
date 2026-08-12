@@ -28,7 +28,50 @@ const log = createLogger('generation.review.critic');
  *    instruction rather than a complaint.
  */
 
-export const VerdictSchema = z.object({
+/**
+ * Normalises a verdict before it is validated.
+ *
+ * A reviewer that graded every criterion correctly and called the field
+ * `otherProblems` instead of `additionalProblems`, or wrote its prose into the
+ * notes and left `summary` empty, has done the job. Rejecting that costs a
+ * complete re-review — the images go up again, the model reads them again, and
+ * the caller pays again — to obtain a word that was already on the page.
+ * Measured on this project: three rounds, sixty-four cents, for a missing
+ * summary.
+ *
+ * So the shape is repaired where the meaning is unambiguous, and only where it
+ * is unambiguous. A missing score or a missing criteria list is not repaired,
+ * because inventing either would be inventing the review itself.
+ */
+function normaliseVerdict(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value;
+  const raw = { ...(value as Record<string, unknown>) };
+
+  if (raw.additionalProblems === undefined && raw.otherProblems !== undefined) {
+    raw.additionalProblems = raw.otherProblems;
+  }
+  if (raw.silhouetteNotes === undefined && typeof raw.silhouette === 'string') {
+    raw.silhouetteNotes = raw.silhouette;
+  }
+
+  if (typeof raw.summary !== 'string' || raw.summary.trim().length === 0) {
+    // Built from what the reviewer did write: the criteria it failed, which is
+    // what a summary of a review is for.
+    const criteria = Array.isArray(raw.criteria) ? (raw.criteria as Array<Record<string, unknown>>) : [];
+    const failed = criteria
+      .filter((entry) => entry?.verdict !== 'PASS')
+      .map((entry) => String(entry?.criterion ?? ''))
+      .filter(Boolean);
+    const notes = typeof raw.silhouetteNotes === 'string' ? raw.silhouetteNotes : '';
+    raw.summary =
+      failed.length > 0
+        ? `${failed.length} of ${criteria.length} acceptance criteria were not met: ${failed.join('; ')}`
+        : notes || 'Every acceptance criterion was met.';
+  }
+  return raw;
+}
+
+const VerdictShape = z.object({
   /** One entry per acceptance criterion, in the order they were given. */
   criteria: z
     .array(
@@ -71,7 +114,9 @@ export const VerdictSchema = z.object({
   summary: z.string(),
 });
 
-export type AssetVerdict = z.infer<typeof VerdictSchema>;
+export const VerdictSchema = z.preprocess(normaliseVerdict, VerdictShape);
+
+export type AssetVerdict = z.infer<typeof VerdictShape>;
 
 export interface ReviewOutcome {
   readonly verdict: AssetVerdict;
@@ -175,7 +220,10 @@ export async function reviewAsset(input: ReviewInput): Promise<ReviewOutcome> {
         images: toImages(render.views),
       },
     ],
-    maxOutputTokens: 4000,
+    // One observation per criterion, in prose, for up to twelve criteria plus a
+    // summary: the review is longer than it looks, and a verdict cut off halfway
+    // is unrecoverable rather than repairable.
+    maxOutputTokens: 9_000,
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.context ? { context: input.context } : {}),
   });

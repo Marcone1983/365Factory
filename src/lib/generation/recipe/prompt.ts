@@ -76,6 +76,11 @@ responsible. Write it for someone debugging your work.
 
 Steps run in order and may only reference parts built before them.
 
+Keep each note to one or two sentences — what the part is, and why it has that
+shape. It is a debugging aid, not an essay: a recipe whose notes run to
+paragraphs will not fit in one answer, and an answer that does not fit is
+discarded whole.
+
 RULES THAT ARE NOT NEGOTIABLE
 
 - Units are metres, and the sizes must be real. A door is about 2m tall, a car
@@ -122,11 +127,15 @@ export interface LearnedExample {
  * over the remaining hand-written ones, because they are evidence of what works
  * in this pipeline rather than of what someone hoped would work.
  *
- * The count is capped. Each example is a complete recipe and costs thousands of
- * tokens; three is enough to establish the form, and beyond that the examples
- * start crowding out the request.
+ * The count is capped at one by default, and that number is not about tokens
+ * alone. An example does not only show the *form* of a recipe, it shows its
+ * *scale*: given three complete recipes, two of them large vehicles, the author
+ * wrote a twenty-thousand-token answer and ran off the end of its own output
+ * limit — an unrecoverable failure, paid for twice. One compact example that
+ * exercises every operator teaches the vocabulary without teaching the bloat,
+ * and it cuts the prompt from sixteen thousand tokens to about six.
  */
-export function recipeExamplePrompt(learned: readonly LearnedExample[] = [], limit = 3): string {
+export function recipeExamplePrompt(learned: readonly LearnedExample[] = [], limit = 1): string {
   const chosen: Array<{ title: string; recipe: AssetRecipe }> = [];
   const first = RECIPE_EXAMPLES[0];
   if (first) chosen.push(first);

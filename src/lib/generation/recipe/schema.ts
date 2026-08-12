@@ -164,7 +164,18 @@ const TransformSchema = z.object({
  * when a render comes back wrong, the note is what identifies which step is
  * responsible for the part that is wrong.
  */
-const noteField = bounded(8, 1200);
+/**
+ * A ceiling is not a target, but a model treats it as one.
+ *
+ * Raised to 1200 characters to stop long notes being rejected, this field was
+ * promptly filled: eighty steps at twelve hundred characters is twenty thousand
+ * tokens of output, which is past what the model can emit in one answer, so
+ * every recipe came back cut off mid-value — an unrecoverable failure, paid for
+ * each time. The ceiling now sits where a useful note actually sits, and the
+ * prompt says so explicitly rather than leaving the model to infer it from a
+ * number it cannot see.
+ */
+const noteField = bounded(8, 400);
 
 /** A named part the recipe builds and can then reference, array or cut with. */
 const StepSchema = z.discriminatedUnion('op', [
