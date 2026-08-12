@@ -227,15 +227,33 @@ export function recipeUserPrompt(request: AssetRequestBrief): string {
  * against the specification it wrote rather than against a vague sense that
  * something looked off.
  */
-export function recipeRepairPrompt(failures: readonly string[]): string {
-  return `The render of your recipe was reviewed against your own acceptance criteria and failed these:
+export function recipeRepairPrompt(failures: readonly string[], recipe: AssetRecipe): string {
+  return `Your recipe was built, photographed and reviewed against your own acceptance criteria. It failed these:
 
 ${failures.map((failure, index) => `${index + 1}. ${failure}`).join('\n')}
 
-Revise the recipe so each of these passes. Change the geometry that is actually
-responsible — the step notes tell you which steps those are. Do not weaken the
-brief to make the failures go away, and do not delete a part rather than fixing
-it: the brief is the specification, and it is the render that is wrong.
+These are the steps you wrote, in order:
 
-Return the complete corrected recipe as one JSON object.`;
+${recipe.steps.map((step) => `  ${step.id} (${step.op}): ${step.note}`).join('\n')}
+
+Fix the geometry that is actually responsible. The observations name the step to
+blame; the notes above say what each step was for.
+
+Return a PATCH, not a new recipe. Send back only what changes:
+
+  reasoning       one or two sentences on why these changes answer the failures
+  replaceSteps    complete replacement steps. A step whose id already exists
+                  replaces it; a new id is appended to the end. Send the whole
+                  step, not a fragment of one.
+  removeStepIds   ids to delete outright
+  outputs         only if the change alters which parts form the finished asset
+  targetSize, edgeSharpness, smoothness, smoothAngleDegrees — only if wrong
+
+Everything you do not mention stays exactly as it is. Do not resend steps that
+were not at fault: geometry the reviewer did not complain about cannot be
+improved by rewriting it, only damaged.
+
+Do not weaken the brief to make a failure go away, and do not delete a part
+rather than fixing it. The brief is the specification; it is the render that is
+wrong.`;
 }

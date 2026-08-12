@@ -537,3 +537,71 @@ export function validateReferences(recipe: AssetRecipe): string[] {
   }
   return problems;
 }
+
+/**
+ * A change to an existing recipe.
+ *
+ * Repairs used to demand the complete corrected recipe back. On an object of
+ * any size that is absurd: to move three steps the model had to re-emit twenty
+ * thousand tokens of unchanged geometry, pay for all of it, and risk getting
+ * any of it wrong on the way past — and on a supercar it simply did not fit in
+ * one answer, so the repair round could not succeed at all.
+ *
+ * A patch names only what changes. A step whose id already exists is replaced;
+ * one whose id is new is appended. Everything else stays exactly as it was,
+ * which is both cheaper and safer: geometry the critic did not complain about
+ * cannot be damaged by a rewrite it never needed.
+ */
+export const RecipePatchSchema = z.object({
+  /** Why these changes answer the failures. One or two sentences. */
+  reasoning: bounded(10, 1500),
+  /** Steps to replace by id, or add if the id is new. */
+  replaceSteps: z.array(StepSchema).max(48).default([]),
+  /** Steps to delete outright. */
+  removeStepIds: z.array(z.string().min(1).max(64)).max(24).default([]),
+  /** Supplied only when the change alters which parts form the asset. */
+  outputs: z.array(z.string().min(1).max(64)).min(1).max(32).optional(),
+  targetSize: Vec3Schema.optional(),
+  edgeSharpness: finite(0, 1).optional(),
+  smoothness: z.number().int().min(0).max(2).optional(),
+  smoothAngleDegrees: finite(1, 180).optional(),
+});
+
+export type RecipePatch = z.infer<typeof RecipePatchSchema>;
+
+/**
+ * Applies a patch and revalidates the whole recipe.
+ *
+ * Revalidation is the point: a patch that removes a step something else still
+ * references, or that adds one before the part it uses is built, produces a
+ * recipe that fails exactly as a badly written one would — with a diagnostic
+ * naming the step — rather than a half-applied edit nobody notices.
+ */
+export function applyRecipePatch(recipe: AssetRecipe, patch: RecipePatch): AssetRecipe {
+  const removed = new Set(patch.removeStepIds);
+  const replacements = new Map(patch.replaceSteps.map((step) => [step.id, step]));
+
+  const steps: RecipeStep[] = [];
+  for (const step of recipe.steps) {
+    if (removed.has(step.id)) continue;
+    const replacement = replacements.get(step.id);
+    if (replacement) {
+      steps.push(replacement);
+      replacements.delete(step.id);
+      continue;
+    }
+    steps.push(step);
+  }
+  // Whatever is left names an id the recipe did not have, so it is new.
+  for (const step of replacements.values()) steps.push(step);
+
+  return AssetRecipeSchema.parse({
+    ...recipe,
+    ...(patch.outputs ? { outputs: patch.outputs } : {}),
+    ...(patch.targetSize ? { targetSize: patch.targetSize } : {}),
+    ...(patch.edgeSharpness !== undefined ? { edgeSharpness: patch.edgeSharpness } : {}),
+    ...(patch.smoothness !== undefined ? { smoothness: patch.smoothness } : {}),
+    ...(patch.smoothAngleDegrees !== undefined ? { smoothAngleDegrees: patch.smoothAngleDegrees } : {}),
+    steps,
+  });
+}

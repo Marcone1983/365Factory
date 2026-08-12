@@ -13,7 +13,7 @@ import {
   renderFailureModesForPrompt,
   topFailureModes,
 } from '@/lib/knowledge/recipe-library';
-import { AssetRecipeSchema, type AssetRecipe } from '../recipe/schema';
+import { AssetRecipeSchema, RecipePatchSchema, applyRecipePatch, type AssetRecipe, type RecipePatch } from '../recipe/schema';
 import { buildAssetFromRecipe, type BuiltAsset } from '../recipe/build';
 import { recipeExamplePrompt, recipeRepairPrompt, recipeSystemPrompt, recipeUserPrompt, type AssetRequestBrief } from '../recipe/prompt';
 import { renderForReview, type RenderReviewResult } from './render';
@@ -293,11 +293,16 @@ export async function generateReviewedAsset(options: AssetLoopOptions): Promise<
 
   const attempts: AssetAttempt[] = [];
   const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+  /** The recipe the next round builds: a patched one, or nothing on the first. */
+  let pendingRecipe: AssetRecipe | undefined = options.initialRecipe;
 
   for (let round = 0; round <= maxRepairs; round += 1) {
     if (options.signal?.aborted) break;
 
-    const { recipe, asset } = await authorRecipe(options, history);
+    const { recipe, asset } = await authorRecipe(
+      pendingRecipe ? { ...options, initialRecipe: pendingRecipe } : options,
+      pendingRecipe ? [] : history,
+    );
 
     emitEvent({
       type: 'asset.generated',
@@ -348,11 +353,37 @@ export async function generateReviewedAsset(options: AssetLoopOptions): Promise<
 
     if (round === maxRepairs) break;
 
-    // Feed the model its own recipe and the specific failures.
-    history.push(
-      { role: 'assistant', content: JSON.stringify(recipe) },
-      { role: 'user', content: recipeRepairPrompt(review.failures) },
-    );
+    // Ask for a patch rather than a rewrite, and apply it here.
+    //
+    // Demanding the complete corrected recipe made every repair re-emit the
+    // whole asset: twenty thousand tokens of unchanged geometry to move three
+    // steps, paid for in full, and on anything the size of a car it did not fit
+    // in one answer at all — so the repair round could not succeed however many
+    // times it was tried.
+    try {
+      const { data: patch } = await completeJson<RecipePatch>({
+        task: 'asset_recipe',
+        system: recipeSystemPrompt(),
+        schema: RecipePatchSchema as unknown as z.ZodType<RecipePatch, z.ZodTypeDef, unknown>,
+        messages: [{ role: 'user', content: recipeRepairPrompt(review.failures, recipe) }],
+        maxOutputTokens: 12_000,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.context ? { context: options.context } : {}),
+      });
+      pendingRecipe = applyRecipePatch(recipe, patch);
+      log.info('repair patch applied', {
+        round,
+        replaced: patch.replaceSteps.length,
+        removed: patch.removeStepIds.length,
+        reasoning: patch.reasoning.slice(0, 200),
+      });
+    } catch (error) {
+      log.warn('the repair could not be applied; keeping the best attempt so far', {
+        round,
+        error: (error as Error).message,
+      });
+      break;
+    }
   }
 
   if (attempts.length === 0) {
