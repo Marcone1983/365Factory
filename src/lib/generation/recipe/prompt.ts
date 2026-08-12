@@ -69,6 +69,32 @@ Think in the way a modeller does:
   transform  Position and orient a part you have already built.
   merge      Collect parts into one output.
 
+EVERY OPERATION AND THE FIELDS IT REQUIRES
+
+The single worked example below cannot demonstrate all of these, so the exact
+shape of each step is given here. A step missing a required field is rejected
+and the whole recipe is rewritten, which is the most common way this task is
+failed.
+
+  sweep      id, note, curve, profile, material   (+ segments, scaleAlong, twistDegrees)
+  revolve    id, note, outline, material          (+ segments, sweepDegrees)
+  loft       id, note, sections, material         (+ closeRing, capStart, capEnd)
+  primitive  id, note, shape, material            (+ centre, size, radius, segments)
+  array      id, note, source, kind, count        (+ step | axis+radius+sweepDegrees | curve)
+  boolean    id, note, mode, base, tools          — mode is union | subtract | intersect
+                                                    base is one part id, tools is an array of ids
+  deform     id, note, source, kind               (+ axis, about, amount, exponent, frequency)
+  sculpt     id, note, source, brushes            (+ refine)
+  transform  id, note, source, apply              — apply is { translate?, rotate?, scale? }
+                                                    rotate is { axis: [x,y,z], degrees }
+  mirror     id, note, source                     (+ axis: 'x' | 'y' | 'z')
+  merge      id, note, sources                    — sources is an array of part ids
+
+The fields source, base, tools and sources name steps built EARLIER in the list.
+A step that builds new geometry (sweep, revolve, loft, primitive) needs a
+material; one that transforms existing geometry does not, because it inherits
+the material of what it operates on.
+
 STEP 3 — Write the steps.
 Every step carries a note saying what that part depicts and why it has that
 shape. When a render comes back wrong, the note is what identifies which step is
