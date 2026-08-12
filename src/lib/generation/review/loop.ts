@@ -379,8 +379,12 @@ export async function generateReviewedAsset(options: AssetLoopOptions): Promise<
         task: 'asset_recipe',
         system: recipeSystemPrompt(),
         schema: RecipePatchSchema as unknown as z.ZodType<RecipePatch, z.ZodTypeDef, unknown>,
-        messages: [{ role: 'user', content: recipeRepairPrompt(review.failures, recipe) }],
-        maxOutputTokens: 12_000,
+        // The most serious failures only. A reviewer that lists twenty problems
+        // is describing an asset that needs rebuilding, and asking for twenty
+        // replacement steps produces a rewrite that does not fit in one answer
+        // — measured: 12,000 tokens, cut off mid-value, unusable and paid for.
+        messages: [{ role: 'user', content: recipeRepairPrompt(review.failures.slice(0, 12), recipe) }],
+        maxOutputTokens: 20_000,
         ...(options.signal ? { signal: options.signal } : {}),
         ...(options.context ? { context: options.context } : {}),
       });

@@ -20,6 +20,7 @@ import { box, cylinder, sphere, subtractAll, union, intersect } from '@/lib/grap
 import {
   arrayAlongCurve,
   arrayLinear,
+  applyTransform,
   arrayRadial,
   bend,
   bezier,
@@ -210,11 +211,19 @@ function runStep(step: RecipeStep, parts: Map<string, PolyMesh>, slotOf: (id: st
       );
 
     case 'loft': {
+      // No frame is supplied, so every section is squared to the rail the way
+      // a lofted surface is meant to be.
+      //
+      // Forcing right=X and up=Y looked harmless and was catastrophic for the
+      // commonest case there is: a vehicle body lofted nose to tail runs along
+      // X, so "right" pointed straight down the rail, the true up collapsed to
+      // nothing, and the section was laid flat on the road. Every car came out
+      // as a blade the width of its own length — 5.55m long and 14cm tall for a
+      // recipe asking for 4.5 x 0.7 — and no repair round could fix it, because
+      // the recipe was right and the interpreter was not.
       const stations: Station[] = step.sections.map((section) => ({
         center: toVec(section.at),
         profile: buildProfile(section.profile),
-        right: v3(1, 0, 0),
-        up: v3(0, 1, 0),
         material: slotOf(step.material),
       }));
       const ring = stations[0]?.profile.length ?? 0;
@@ -302,16 +311,16 @@ function runStep(step: RecipeStep, parts: Map<string, PolyMesh>, slotOf: (id: st
           vertex.position = v3(vertex.position.x * s.x, vertex.position.y * s.y, vertex.position.z * s.z);
         }
       }
-      if (apply.rotate) {
-        // A rotation is expressed as a one-instance radial array, which is the
-        // same code path the arrays use and therefore the same behaviour.
-        const rotated = arrayRadial(source, 1, toVec(apply.rotate.axis), { sweep: radians(apply.rotate.degrees) * 2 });
-        source.vertices.length = 0;
-        source.faces.length = 0;
-        source.merge(rotated);
-      }
-      if (apply.translate) source.translate(toVec(apply.translate));
-      return source;
+      // Rotation happens about the origin and before the translation, which is
+      // the order every modelling tool uses and the one the step notes assume:
+      // "stand the wheel up, then put it at the rear axle".
+      const rotated = apply.rotate
+        ? applyTransform(source, {
+            rotate: { axis: toVec(apply.rotate.axis), angle: radians(apply.rotate.degrees) },
+          })
+        : source;
+      if (apply.translate) rotated.translate(toVec(apply.translate));
+      return rotated;
     }
 
     case 'sculpt': {
@@ -379,7 +388,24 @@ function fitToTarget(mesh: PolyMesh, target: Vec3): void {
   }
 }
 
-export function interpretRecipe(recipe: AssetRecipe, options: { seed?: number } = {}): InterpretResult {
+export interface InterpretOptions {
+  readonly seed?: number;
+  /**
+   * Scale the finished asset to its `targetSize`. On by default, and only ever
+   * turned off to measure.
+   *
+   * The fit is one uniform factor chosen from the tightest axis, which means a
+   * part measured on its own comes back at a completely different scale from
+   * the same part measured inside the whole asset. That is correct for
+   * shipping and useless for diagnosis: a body that looks 21cm tall in a
+   * per-step measurement may be a flat blade, or may be a correct body next to
+   * a wheel that landed two metres away and dragged the factor down with it.
+   * Measuring with the fit off is how those two are told apart.
+   */
+  readonly fit?: boolean;
+}
+
+export function interpretRecipe(recipe: AssetRecipe, options: InterpretOptions = {}): InterpretResult {
   const started = Date.now();
   const referenceProblems = validateReferences(recipe);
   if (referenceProblems.length > 0) {
@@ -421,7 +447,7 @@ export function interpretRecipe(recipe: AssetRecipe, options: { seed?: number } 
     throw new RecipeError('the recipe produced no geometry at all');
   }
 
-  fitToTarget(assembled, toVec(recipe.targetSize));
+  if (options.fit !== false) fitToTarget(assembled, toVec(recipe.targetSize));
 
   if (recipe.uvProjection === 'cylindrical') projectCylindricalUvs(assembled, recipe.uvScale);
   else projectBoxUvs(assembled, recipe.uvScale);

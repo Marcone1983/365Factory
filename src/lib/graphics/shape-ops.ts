@@ -227,7 +227,18 @@ export interface Transform {
   readonly scale?: Vec3 | number;
 }
 
-function applyTransform(mesh: PolyMesh, transform: Transform): PolyMesh {
+/**
+ * Scales, then rotates about the origin, then translates.
+ *
+ * Exported because the recipe interpreter's `transform` step means exactly
+ * this. It used to express a rotation as a one-instance radial array, on the
+ * reasoning that arrays already rotate — but a radial array of one instance
+ * places that instance at the start of its sweep, which is an angle of zero.
+ * Every `rotate` in every recipe was therefore silently discarded: wheels built
+ * lying flat by a revolve stayed flat, and the reviewer saw discs floating
+ * beside the car with no way to say why.
+ */
+export function applyTransform(mesh: PolyMesh, transform: Transform): PolyMesh {
   const copy = mesh.clone();
   if (transform.scale !== undefined) {
     const s = typeof transform.scale === 'number'
