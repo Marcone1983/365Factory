@@ -86,6 +86,12 @@ beforeAll(async () => {
     BOOTSTRAP_ADMIN_PASSWORD: ADMIN_PASSWORD,
   };
 
+  // The child is hermetic: it must not read a developer's `.env`, or the
+  // "refuses when nothing is configured" assertions pass or fail depending on
+  // whose machine is running them — and a real key there would let the suite
+  // make real paid calls.
+  env.FACTORY_IGNORE_DOTENV = '1';
+
   // The child gets an explicitly built environment; the cast is needed because
   // the Node typings insist ProcessEnv always carries NODE_ENV.
   const child = spawn('npx', ['next', 'start', '-p', String(port)], {
@@ -153,6 +159,23 @@ async function visit(page: Page, route: string): Promise<Visit> {
   const response = await page.goto(`${baseUrl}${route}`, { waitUntil: 'networkidle', timeout: 45_000 });
   const text = await page.locator('body').innerText();
   return { page, errors, text, status: response?.status() ?? 0 };
+}
+
+/**
+ * Whether the server under test will find a language-model provider.
+ *
+ * Both routes have to be checked: the ambient environment, and a `.env` in the
+ * working directory, which Next.js reads on its own before the application
+ * starts and which therefore cannot be suppressed from here.
+ */
+function providerConfigured(): boolean {
+  if (process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENROUTER_API_KEY) return true;
+  try {
+    const dotenv = fs.readFileSync(path.resolve(process.cwd(), '.env'), 'utf8');
+    return /^\s*(ANTHROPIC|OPENAI|OPENROUTER)_API_KEY\s*=\s*\S/m.test(dotenv);
+  } catch {
+    return false;
+  }
 }
 
 describe.skipIf(!!process.env.SKIP_E2E)('operator console', () => {
@@ -256,8 +279,16 @@ describe.skipIf(!!process.env.SKIP_E2E)('operator console', () => {
         data: { content: 'What opportunities have you found?' },
         headers: { 'x-csrf-token': await csrf(page) },
       });
-      // No provider key is set in this environment, so the honest outcome is a
-      // 503 naming the missing configuration — never a plausible answer.
+      // This asserts a property of an *unconfigured* deployment, so it can only
+      // be checked on one. Next.js loads `.env` itself, before any application
+      // code runs, so a developer with a real key in the working directory is
+      // running a configured platform and the premise does not hold — the test
+      // says so rather than failing, and still guards the property everywhere
+      // it can be guarded, which is CI and any fresh checkout.
+      if (providerConfigured()) {
+        expect([200, 503]).toContain(turn.status());
+        return;
+      }
       expect(turn.status()).toBe(503);
       const body = (await turn.json()) as { error: string };
       expect(body.error).toMatch(/not configured/i);

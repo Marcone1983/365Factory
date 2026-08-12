@@ -412,7 +412,7 @@ async function generateAuthoredMesh(
       reviewRounds: result.rounds,
       reusedFromLibrary: result.reused,
       accepted: result.accepted,
-      failedCriteria: best.verdict.criteria.filter((entry) => !entry.passed).map((entry) => entry.criterion),
+      failedCriteria: best.verdict.criteria.filter((entry) => entry.verdict !== 'PASS').map((entry) => entry.criterion),
       steps: best.recipe.steps.length,
       warnings: best.asset.warnings,
     };

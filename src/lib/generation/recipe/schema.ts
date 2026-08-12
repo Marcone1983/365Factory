@@ -23,6 +23,37 @@ import { z } from 'zod';
 
 const finite = (min: number, max: number): z.ZodNumber => z.number().finite().min(min).max(max);
 
+/**
+ * A bounded value the author is allowed to get slightly wrong.
+ *
+ * Rejecting a recipe because one segment count came back as 2 where the minimum
+ * is 3 is not validation, it is an expensive tantrum: the router's only repair
+ * for a schema violation is to regenerate the entire recipe on the deep model,
+ * which was measured on this project at about a dollar a time. Clamping to the
+ * documented bound loses nothing — the bound is what the interpreter can build,
+ * and 2 segments was never going to mean anything anyway.
+ *
+ * This is deliberately applied only where coercion is meaningful: counts, and
+ * the length ceilings on prose. A coordinate or a radius outside its range is a
+ * different kind of wrong — the author meant something the kernel cannot build —
+ * and those stay strict, because silently moving geometry hides the mistake
+ * instead of surfacing it.
+ */
+const clampedInt = (min: number, max: number, fallback: number): z.ZodTypeAny =>
+  z.preprocess((value) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return value;
+    return Math.min(max, Math.max(min, Math.round(value)));
+  }, z.number().int().min(min).max(max).default(fallback));
+
+/** Prose the author may overrun. Truncated on a word boundary rather than regenerated. */
+const bounded = (min: number, max: number): z.ZodTypeAny =>
+  z.preprocess((value) => {
+    if (typeof value !== 'string' || value.length <= max) return value;
+    const cut = value.slice(0, max);
+    const lastSpace = cut.lastIndexOf(' ');
+    return lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut;
+  }, z.string().min(min).max(max));
+
 /** Coordinates are in metres. Bounded so a recipe cannot place geometry at infinity. */
 const Vec3Schema = z.tuple([finite(-5000, 5000), finite(-5000, 5000), finite(-5000, 5000)]);
 
@@ -65,14 +96,14 @@ const ProfileSchema = z.discriminatedUnion('type', [
     type: z.literal('ellipse'),
     radiusX: finite(0.0001, 500),
     radiusY: finite(0.0001, 500),
-    segments: z.number().int().min(3).max(96).default(16),
+    segments: clampedInt(3, 96, 16),
   }),
   z.object({
     type: z.literal('rectangle'),
     width: finite(0.0001, 500),
     height: finite(0.0001, 500),
     cornerRadius: finite(0, 250).default(0),
-    segments: z.number().int().min(4).max(96).default(16),
+    segments: clampedInt(4, 96, 16),
   }),
   z.object({
     /**
@@ -85,7 +116,7 @@ const ProfileSchema = z.discriminatedUnion('type', [
     radiusX: finite(0.0001, 500),
     radiusY: finite(0.0001, 500),
     exponent: finite(0.4, 12).default(2.5),
-    segments: z.number().int().min(4).max(96).default(20),
+    segments: clampedInt(4, 96, 20),
   }),
   z.object({
     type: z.literal('polygon'),
@@ -133,7 +164,7 @@ const TransformSchema = z.object({
  * when a render comes back wrong, the note is what identifies which step is
  * responsible for the part that is wrong.
  */
-const noteField = z.string().min(8).max(600);
+const noteField = bounded(8, 1200);
 
 /** A named part the recipe builds and can then reference, array or cut with. */
 const StepSchema = z.discriminatedUnion('op', [
@@ -143,7 +174,7 @@ const StepSchema = z.discriminatedUnion('op', [
     note: noteField,
     curve: CurveSchema,
     profile: ProfileSchema,
-    segments: z.number().int().min(2).max(400).default(24),
+    segments: clampedInt(2, 400, 24),
     scaleAlong: VaryingSchema.optional(),
     twistDegrees: VaryingSchema.optional(),
     capStart: z.boolean().default(true),
@@ -156,7 +187,7 @@ const StepSchema = z.discriminatedUnion('op', [
     note: noteField,
     /** Half-outline in the XY plane; revolved about Y. */
     outline: z.array(Point2Schema).min(2).max(128),
-    segments: z.number().int().min(3).max(128).default(24),
+    segments: clampedInt(3, 128, 24),
     sweepDegrees: finite(1, 360).default(360),
     material: z.string().min(1).max(48),
   }),
@@ -183,7 +214,7 @@ const StepSchema = z.discriminatedUnion('op', [
     size: Vec3Schema.default([1, 1, 1]),
     /** Sphere and cylinder radius; ignored for a box. */
     radius: finite(0.0001, 500).default(0.5),
-    segments: z.number().int().min(3).max(96).default(20),
+    segments: clampedInt(3, 96, 20),
     material: z.string().min(1).max(48),
   }),
   z.object({
@@ -350,11 +381,18 @@ const MaterialSchema = z.object({
  */
 const BriefSchema = z.object({
   /** The object in one precise noun phrase: "Victorian cast-iron street lantern". */
-  subject: z.string().min(8).max(160),
-  /** Period, region, genre, design language. What a modeller would be told. */
-  style: z.string().min(12).max(400),
+  subject: bounded(8, 160),
+  /**
+   * Period, region, genre, design language. What a modeller would be told.
+   *
+   * The ceiling is generous because the cost of it being tight is not a shorter
+   * answer: a length violation makes the router re-generate the whole recipe on
+   * the deep model. A limit a competent author naturally exceeds is not
+   * validation, it is a tax — measured at roughly a dollar a time.
+   */
+  style: bounded(12, 900),
   /** What it is for in the game, which governs how much detail goes where. */
-  purpose: z.string().min(12).max(300),
+  purpose: bounded(12, 300),
   /**
    * The features that must be recognisable, most important first. Each is a
    * concrete visual claim, not an adjective: "four glazed panels separated by
@@ -367,7 +405,7 @@ const BriefSchema = z.object({
    * properly takes more words than describing a lamp post — so the ceiling is
    * generous while the floor stays strict.
    */
-  silhouette: z.string().min(16).max(900),
+  silhouette: bounded(16, 900),
   /** Real-world proportion anchors: what is how many times what. */
   proportions: z.array(z.string().min(6).max(200)).min(1).max(12),
   /**
@@ -376,7 +414,7 @@ const BriefSchema = z.object({
    * and leather needs to say how light behaves on each, so the ceiling is
    * generous while the floor stays strict.
    */
-  surfaceNotes: z.string().min(12).max(700),
+  surfaceNotes: bounded(12, 700),
   /** Mistakes typical of this object that the recipe must not make. */
   avoid: z.array(z.string().min(6).max(200)).min(1).max(12),
   /**

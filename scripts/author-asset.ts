@@ -67,8 +67,8 @@ async function main(): Promise<void> {
         `  ${verdict.summary}\n`,
     );
     for (const criterion of verdict.criteria) {
-      process.stdout.write(`  [${criterion.passed ? 'pass' : 'FAIL'}] ${criterion.criterion}\n`);
-      if (!criterion.passed) process.stdout.write(`         observed: ${criterion.observation}\n`);
+      process.stdout.write(`  [${criterion.verdict.padEnd(7)}] ${criterion.criterion}\n`);
+      if (criterion.verdict !== 'PASS') process.stdout.write(`            observed: ${criterion.observation}\n`);
     }
   }
 

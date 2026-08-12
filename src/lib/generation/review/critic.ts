@@ -34,7 +34,17 @@ export const VerdictSchema = z.object({
     .array(
       z.object({
         criterion: z.string(),
-        passed: z.boolean(),
+        /**
+         * Three states, not two.
+         *
+         * A reviewer asked for a boolean on "the butt flares wider than the
+         * waist" answers PARTIAL when the flare is there and too slight to
+         * read, which is a different fact from absent and calls for a different
+         * repair. Forcing it into a boolean threw that away — and, because the
+         * model kept writing the three-state answer anyway, made the contract
+         * fail and the whole review regenerate at the caller's expense.
+         */
+        verdict: z.enum(['PASS', 'FAIL', 'PARTIAL']),
         /** What was actually observed. Required whether it passed or not. */
         observation: z.string(),
       }),
@@ -76,7 +86,7 @@ You are shown renders of one asset: several lit three-quarter, front, side and o
 
 HOW TO REVIEW
 
-Work through the acceptance criteria one at a time, in order. For each one, look for the thing it describes and answer whether it is actually present. Record what you observed either way — a criterion you passed without looking at is worse than useless.
+Work through the acceptance criteria one at a time, in order. For each one, look for the thing it describes and answer PASS, FAIL or PARTIAL. PARTIAL is for a form that is present but too slight to read at the distance the brief specifies — a flare that exists and cannot be seen is a different fault from one that is missing, and it asks for a different repair. Record what you observed either way: a criterion you passed without looking at is worse than useless.
 
 Then check the mustRead features. Any that you cannot find in any view goes in missingFeatures.
 
@@ -172,7 +182,12 @@ export async function reviewAsset(input: ReviewInput): Promise<ReviewOutcome> {
 
   const failures: string[] = [];
   for (const entry of verdict.criteria) {
-    if (!entry.passed) failures.push(`Acceptance criterion not met — ${entry.criterion}. Observed: ${entry.observation}`);
+    if (entry.verdict !== 'PASS') {
+      // PARTIAL is reported as what it is: the form is present and too weak to
+      // read, which asks the author to strengthen it rather than to add it.
+      const lead = entry.verdict === 'PARTIAL' ? 'Acceptance criterion only partly met' : 'Acceptance criterion not met';
+      failures.push(`${lead} — ${entry.criterion}. Observed: ${entry.observation}`);
+    }
   }
   for (const feature of verdict.missingFeatures) {
     failures.push(`Required feature is absent from every view: ${feature}`);

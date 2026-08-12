@@ -73,7 +73,14 @@ export const TASK_POLICIES: Record<TaskName, TaskPolicy> = {
   // characters before a single coordinate, and the geometry that follows is
   // long. Temperature is moderate — invention in the design, precision in the
   // numbers.
-  asset_recipe: { tier: 'deep', maxOutputTokens: 16_000, temperature: 0.55, cacheTtlSeconds: 0, semanticCache: false, description: 'Write a full modelling recipe for a requested 3D asset.' },
+  // Balanced, not deep, and deliberately so. The expensive model writes a better
+  // first draft; it does not write a better *third* one, because what fixes a
+  // recipe is the critic looking at the render and saying which step is wrong.
+  // Measured on this project, a deep-tier authoring round costs about five times
+  // a balanced one — so the same money buys one shot from the best model or a
+  // loop of five from a very good one, and the loop wins. Spend on the feedback,
+  // not on the single guess.
+  asset_recipe: { tier: 'balanced', maxOutputTokens: 16_000, temperature: 0.55, cacheTtlSeconds: 0, semanticCache: false, description: 'Write a full modelling recipe for a requested 3D asset.' },
   // Reviewing renders is a judgement call made against fixed criteria, so it
   // runs cold. It is never cached: the whole point is to look at this asset.
   asset_review: { tier: 'balanced', maxOutputTokens: 5000, temperature: 0.05, cacheTtlSeconds: 0, semanticCache: false, description: 'Grade rendered asset views against the brief that specified them.' },

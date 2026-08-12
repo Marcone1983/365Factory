@@ -415,10 +415,10 @@ async function persistToLibrary(
     const passedLater = new Set<string>();
     for (const attempt of [...attempts].reverse()) {
       for (const criterion of attempt.verdict.criteria) {
-        if (criterion.passed) passedLater.add(criterion.criterion);
+        if (criterion.verdict === 'PASS') passedLater.add(criterion.criterion);
       }
       for (const criterion of attempt.verdict.criteria) {
-        if (criterion.passed) continue;
+        if (criterion.verdict === 'PASS') continue;
         recordFailureMode(criterion.criterion, {
           category,
           recovered: passedLater.has(criterion.criterion),

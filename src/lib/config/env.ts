@@ -274,7 +274,59 @@ function resolveSessionSecret(parsed: RawEnv, dataDir: string): string {
   return secret;
 }
 
+/**
+ * Reads a `.env` file into the process environment.
+ *
+ * Next.js does this for the web app, and nothing did it for the command-line
+ * scripts — so the setup the README documents (`cp .env.example .env`, then
+ * `npm run migrate`) could not work: the migration ran against an environment
+ * that had never seen the file. Every provider key was silently absent and the
+ * platform correctly reported itself unconfigured, which looked like a broken
+ * install rather than a missing loader.
+ *
+ * A variable already present in the environment always wins. A `.env` file is a
+ * convenience for a developer's machine; a real deployment sets variables
+ * properly, and a file left in the image must never override them.
+ */
+function loadDotEnv(file = path.resolve(process.cwd(), '.env')): void {
+  // Never under test. A suite that picks up the developer's `.env` acquires
+  // real credentials, and a test that acquires real credentials can make real
+  // paid calls and can pass for the wrong reason — the honest-failure tests in
+  // particular assert what happens when nothing is configured, which is exactly
+  // what a stray key would hide.
+  if (process.env.NODE_ENV === 'test' || process.env.VITEST !== undefined) return;
+
+  let contents: string;
+  try {
+    contents = fs.readFileSync(file, 'utf8');
+  } catch {
+    return;
+  }
+
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#')) continue;
+    const separator = line.indexOf('=');
+    if (separator <= 0) continue;
+
+    const key = line.slice(0, separator).trim();
+    if (key.length === 0 || key in process.env) continue;
+
+    let value = line.slice(separator + 1).trim();
+    // A quoted value keeps everything inside the quotes, including a '#'.
+    // An unquoted one ends at the first '#', which starts a comment.
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    } else {
+      const comment = value.indexOf(' #');
+      if (comment >= 0) value = value.slice(0, comment).trim();
+    }
+    process.env[key] = value;
+  }
+}
+
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
+  if (source === process.env) loadDotEnv();
   const result = EnvSchema.safeParse(source);
   if (!result.success) {
     const issues = result.error.issues

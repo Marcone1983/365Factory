@@ -1,4 +1,5 @@
 import { config } from '@/lib/config/env';
+import { createLogger } from '@/lib/observability/logger';
 import { request } from '../http';
 import {
   ProviderNotConfiguredError,
@@ -48,6 +49,24 @@ function mapFinish(reason: string | null): FinishReason {
     default:
       return 'other';
   }
+}
+
+/**
+ * Models that reject a parameter rather than ignoring it, learned at runtime.
+ *
+ * Process-local on purpose: it is a fact about the endpoint this build is
+ * talking to, not about the user's data, so it costs one failed request per
+ * process and needs no storage.
+ */
+const UNSUPPORTED_TEMPERATURE = new Set<string>();
+
+const log = createLogger('providers.anthropic');
+
+/** Whether an error is the API refusing a named parameter. */
+function isDeprecatedParameterError(error: unknown, parameter: string): boolean {
+  if (!(error instanceof ProviderRequestError) || error.status !== 400) return false;
+  const body = (error.body ?? '').toLowerCase();
+  return body.includes(parameter) && (body.includes('deprecated') || body.includes('unsupported') || body.includes('not supported'));
 }
 
 export class AnthropicProvider implements LLMProvider {
@@ -108,7 +127,13 @@ export class AnthropicProvider implements LLMProvider {
       ),
     };
     if (system) body.system = system;
-    if (req.temperature !== undefined) body.temperature = req.temperature;
+    // Newer models reject `temperature` outright rather than ignoring it, and
+    // which ones do changes as models are released. Rather than carry a list
+    // that goes stale, the provider learns it: the first 400 that names the
+    // parameter records the model and every later request omits it.
+    if (req.temperature !== undefined && !UNSUPPORTED_TEMPERATURE.has(model)) {
+      body.temperature = req.temperature;
+    }
     if (req.stopSequences?.length) body.stop_sequences = [...req.stopSequences];
     if (req.tools?.length) {
       body.tools = req.tools.map((t) => ({
@@ -119,20 +144,35 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     const started = Date.now();
-    const raw = await request({
-      provider: this.name,
-      url: `${cfg.ANTHROPIC_BASE_URL.replace(/\/$/, '')}/v1/messages`,
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify(body),
-      timeoutMs: cfg.LLM_TIMEOUT_MS,
-      maxAttempts: cfg.LLM_MAX_ATTEMPTS,
-      signal,
-    });
+    const send = async (): Promise<Awaited<ReturnType<typeof request>>> =>
+      request({
+        provider: this.name,
+        url: `${cfg.ANTHROPIC_BASE_URL.replace(/\/$/, '')}/v1/messages`,
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify(body),
+        timeoutMs: cfg.LLM_TIMEOUT_MS,
+        maxAttempts: cfg.LLM_MAX_ATTEMPTS,
+        signal,
+      });
+
+    let raw: Awaited<ReturnType<typeof request>>;
+    try {
+      raw = await send();
+    } catch (error) {
+      // A parameter this model does not accept is a configuration mismatch, not
+      // a failure of the request: drop it, remember, and send once more. Any
+      // other 400 is a real error and is rethrown untouched.
+      if (!isDeprecatedParameterError(error, 'temperature') || body.temperature === undefined) throw error;
+      UNSUPPORTED_TEMPERATURE.add(model);
+      delete body.temperature;
+      log.info('this model rejects `temperature`; omitting it from now on', { model });
+      raw = await send();
+    }
 
     let parsed: AnthropicResponseBody;
     try {

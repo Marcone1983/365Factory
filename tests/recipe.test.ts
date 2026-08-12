@@ -77,12 +77,39 @@ describe('recipe validation', () => {
     expect(validateReferences(recipe).join(' ')).toMatch(/output "nonexistent"/);
   });
 
-  it('refuses values outside the safe ranges instead of trying them', () => {
-    // A recipe cannot ask for a million segments and exhaust memory.
-    expect(() => parse({ ...LANTERN, steps: [{ ...LANTERN.steps[0], segments: 1_000_000 }] })).toThrow();
+  it('clamps a segment count rather than rejecting the whole recipe', () => {
+    // A recipe still cannot ask for a million segments and exhaust memory — but
+    // the protection is now a clamp rather than a rejection, because rejecting
+    // costs a full regeneration on a paid model and clamping costs nothing. The
+    // ceiling is what the interpreter can build; a request beyond it never meant
+    // anything more than the ceiling.
+    const huge = parse({ ...LANTERN, steps: [{ ...LANTERN.steps[0], segments: 1_000_000 }] });
+    const first = huge.steps[0] as { segments: number };
+    expect(first.segments).toBeLessThanOrEqual(400);
+
+    const tiny = parse({ ...LANTERN, steps: [{ ...LANTERN.steps[0], segments: 1 }] });
+    expect((tiny.steps[0] as { segments: number }).segments).toBeGreaterThanOrEqual(2);
+  });
+
+  it('truncates prose that overruns rather than rejecting the whole recipe', () => {
+    const long = 'x'.repeat(5000);
+    const parsed = parse({ ...LANTERN, brief: { ...LANTERN.brief, style: long } });
+    expect(parsed.brief.style.length).toBeLessThanOrEqual(900);
+    expect(parsed.brief.style.length).toBeGreaterThan(100);
+  });
+
+  it('still refuses what cannot be coerced into something buildable', () => {
     expect(() => parse({ ...LANTERN, smoothness: 9 })).toThrow();
     expect(() =>
       parse({ ...LANTERN, materials: [{ id: 'x', family: 'unobtainium', colorIndex: 0 }] }),
+    ).toThrow();
+    // A radius outside the kernel's range means the author wanted something it
+    // cannot build. Moving it silently would hide that; it stays fatal.
+    expect(() =>
+      parse({
+        ...LANTERN,
+        steps: [{ ...LANTERN.steps[0], profile: { type: 'superellipse', radiusX: -3, radiusY: 1, exponent: 2 } }],
+      }),
     ).toThrow();
   });
 
