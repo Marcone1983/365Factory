@@ -64,7 +64,14 @@ export interface TextureSet {
 }
 
 const FAMILY_DEFAULTS: Record<MaterialFamily, Omit<MaterialRecipe, 'family' | 'baseColor'>> = {
-  car_paint: { roughness: 0.22, metallic: 0.35, relief: 0.012, detailScale: 26, wear: 0.05, clearcoat: 1 },
+  // Paint is the one material where visible relief is a defect. At detailScale
+  // 26 the height field undulates about every 5cm on a car-sized box UV, and a
+  // clearcoat turns a 5cm undulation into rolling bands of highlight — the look
+  // of a badly filled panel, over the whole body. Real orange peel is under a
+  // millimetre, far below what a texel of this map can carry, so the honest
+  // answer is a surface that is flat to the eye with the finest grain the map
+  // can resolve carrying the metallic flake.
+  car_paint: { roughness: 0.22, metallic: 0.35, relief: 0.003, detailScale: 120, wear: 0.05, clearcoat: 1 },
   metal_brushed: { roughness: 0.34, metallic: 0.95, relief: 0.03, detailScale: 120, wear: 0.15 },
   metal_worn: { roughness: 0.55, metallic: 0.85, relief: 0.09, detailScale: 34, wear: 0.6 },
   rubber: { roughness: 0.92, metallic: 0.02, relief: 0.08, detailScale: 48, wear: 0.25 },
