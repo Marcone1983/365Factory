@@ -285,9 +285,26 @@ export async function renderForReview(glb: Buffer, options: RenderOptions = {}):
       '/asset.glb',
     )) as RenderReviewResult['measured'];
 
+    // Point the labelled views at the asset the way it was actually built.
+    //
+    // The framings assume the subject faces the camera at azimuth 0, which is
+    // true only if the recipe happened to lay it out along Z. A car authored
+    // nose-to-tail along X — which is what every recipe here has done — then
+    // gets photographed side-on and told it is the front, and the critic grades
+    // "no B-pillar visible from the side" against a picture of the tail. The
+    // longest horizontal axis is the length, so the whole set of shots is
+    // rotated to look down it.
+    const lengthwiseOffset = measured.sizeMetres.x > measured.sizeMetres.z * 1.15 ? 90 : 0;
+    if (lengthwiseOffset !== 0) {
+      log.debug('the asset is longest along X, so the views are rotated to face it', {
+        size: measured.sizeMetres,
+      });
+    }
+
     const views: AssetView[] = [];
 
-    for (const [azimuth, elevation, distance, label] of shots) {
+    for (const [rawAzimuth, elevation, distance, label] of shots) {
+      const azimuth = rawAzimuth + lengthwiseOffset;
       await page.evaluate(
         ([a, e, d]) => (window as unknown as { shoot: (a: number, e: number, d: number, s: boolean) => boolean }).shoot(a as number, e as number, d as number, false),
         [azimuth, elevation, distance] as const,
@@ -299,10 +316,11 @@ export async function renderForReview(glb: Buffer, options: RenderOptions = {}):
       await page.evaluate(() => (window as unknown as { setSilhouette: (on: boolean) => boolean }).setSilhouette(true));
       // Two silhouettes are enough: the profile and the front elevation are
       // where a wrong outline is most obvious.
-      for (const [azimuth, elevation, distance, label] of [
+      for (const [rawAzimuth, elevation, distance, label] of [
         [90, 2, 1.0, 'side'],
         [0, 2, 1.0, 'front'],
       ] as const) {
+        const azimuth = rawAzimuth + lengthwiseOffset;
         await page.evaluate(
           ([a, e, d]) => (window as unknown as { shoot: (a: number, e: number, d: number, s: boolean) => boolean }).shoot(a as number, e as number, d as number, true),
           [azimuth, elevation, distance] as const,
