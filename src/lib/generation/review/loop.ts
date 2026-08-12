@@ -313,13 +313,27 @@ export async function generateReviewedAsset(options: AssetLoopOptions): Promise<
     });
 
     const render = await renderForReview(asset.glb);
-    const review = await reviewAsset({
-      recipe,
-      render,
-      passMark,
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.context ? { context: options.context } : {}),
-    });
+    let review;
+    try {
+      review = await reviewAsset({
+        recipe,
+        render,
+        passMark,
+        ...(options.signal ? { signal: options.signal } : {}),
+        ...(options.context ? { context: options.context } : {}),
+      });
+    } catch (error) {
+      // A reviewer that could not be understood must not destroy the rounds
+      // that were already paid for and graded. The loop stops here and returns
+      // the best attempt it has; only a failure on the very first round, where
+      // there is nothing to return, is fatal.
+      log.warn('the review failed; keeping the rounds already graded', {
+        round,
+        error: (error as Error).message,
+      });
+      if (attempts.length === 0) throw error;
+      break;
+    }
 
     const attempt: AssetAttempt = {
       round,

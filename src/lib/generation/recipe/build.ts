@@ -35,6 +35,30 @@ export interface BuiltAsset {
   };
 }
 
+/**
+ * An asset built but not yet written to a file.
+ *
+ * A scene is several assets in one GLB, and the only way to place a car and a
+ * driver in the same file without re-exporting and re-importing each of them is
+ * to keep the geometry, the materials and the textures in hand before the
+ * container is written. That is all this is: the same build, stopped one step
+ * short of `writeGlb`.
+ *
+ * Material indices on the primitives are local to `materials`, and texture
+ * indices inside those materials are local to `textures`. A caller merging two
+ * of these must offset both, which is exactly what `buildSceneFromRecipes`
+ * does.
+ */
+export interface PreparedAsset {
+  readonly name: string;
+  readonly primitives: readonly MeshPrimitiveData[];
+  readonly materials: readonly GltfMaterial[];
+  readonly textures: readonly GlbTexture[];
+  readonly warnings: readonly string[];
+  readonly triangleCount: number;
+  readonly stats: BuiltAsset['stats'];
+}
+
 export interface BuildOptions {
   /** Colours the recipe's colorIndex values select from. */
   readonly palette: readonly string[];
@@ -50,6 +74,41 @@ export interface BuildOptions {
 }
 
 export function buildAssetFromRecipe(recipe: AssetRecipe, options: BuildOptions): BuiltAsset {
+  const prepared = prepareAsset(recipe, options);
+
+  const glb = writeGlb({
+    generator: `Autonomous Daily App Factory · recipe interpreter`,
+    meshes: [{ name: recipe.name, primitives: prepared.primitives }],
+    materials: [...prepared.materials],
+    textures: [...prepared.textures],
+    nodes: [{ name: recipe.name, mesh: 0 }],
+  });
+
+  const validation = validateGlb(glb, { requireUvs: true });
+  const warnings = [...prepared.warnings, ...validation.problems];
+  if (warnings.length > 0) {
+    log.warn('recipe produced warnings', { name: recipe.name, warnings });
+  }
+
+  return {
+    glb,
+    name: recipe.name,
+    triangleCount: validation.summary?.triangles ?? prepared.triangleCount,
+    materialCount: prepared.materials.length,
+    textureCount: prepared.textures.length,
+    warnings,
+    stats: prepared.stats,
+  };
+}
+
+/**
+ * Everything `buildAssetFromRecipe` does except write the container.
+ *
+ * Exported because a scene needs the parts, not the file: merging two finished
+ * GLBs would mean parsing back out what was just written, and every parse of
+ * one's own output is a place for the two representations to disagree.
+ */
+export function prepareAsset(recipe: AssetRecipe, options: BuildOptions): PreparedAsset {
   const seed = options.seed ?? seedFrom(recipe.name);
   const result = interpretRecipe(recipe, { seed });
 
@@ -140,27 +199,13 @@ export function buildAssetFromRecipe(recipe: AssetRecipe, options: BuildOptions)
     materialIndex: group.material,
   }));
 
-  const glb = writeGlb({
-    generator: `Autonomous Daily App Factory · recipe interpreter`,
-    meshes: [{ name: recipe.name, primitives }],
+  return {
+    name: recipe.name,
+    primitives,
     materials,
     textures,
-    nodes: [{ name: recipe.name, mesh: 0 }],
-  });
-
-  const validation = validateGlb(glb, { requireUvs: true });
-  const warnings = [...result.warnings, ...validation.problems];
-  if (warnings.length > 0) {
-    log.warn('recipe produced warnings', { name: recipe.name, warnings });
-  }
-
-  return {
-    glb,
-    name: recipe.name,
-    triangleCount: validation.summary?.triangles ?? result.triangleCount,
-    materialCount: materials.length,
-    textureCount: textures.length,
-    warnings,
+    warnings: result.warnings,
+    triangleCount: result.triangleCount,
     stats: { ...result.stats, occlusionMs, occlusionRays },
   };
 }

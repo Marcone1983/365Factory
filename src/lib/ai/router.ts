@@ -281,9 +281,30 @@ export interface JsonCompleteOptions<T> extends Omit<CompleteOptions, 'jsonOutpu
  */
 export async function completeJson<T>(options: JsonCompleteOptions<T>): Promise<{ data: T; response: LLMResponse }> {
   const repairAttempts = options.repairAttempts ?? 2;
-  const messages: LLMMessage[] = [...options.messages];
+  let messages: LLMMessage[] = [...options.messages];
   let lastRaw = '';
   let lastIssues = '';
+
+  /**
+   * The conversation for a repair round: the original request without its
+   * pictures, the model's own previous answer in full, and what was wrong.
+   *
+   * Two things matter here, and both were learned by paying for the
+   * alternative. The pictures are dropped because a repair is about the shape
+   * of the JSON, not about the renders — a vision review resent its six images
+   * on every retry and billed nine thousand tokens to be told a field was
+   * called `impact` instead of `severity`. And the previous answer is sent
+   * whole rather than truncated, because a model shown half of its own review
+   * writes the other half again from an image it can no longer see.
+   *
+   * The array is rebuilt rather than appended to, so three repair rounds cost
+   * three times one round instead of growing quadratically.
+   */
+  const repairConversation = (answer: string, complaint: string): LLMMessage[] => [
+    ...options.messages.map(({ images: _images, ...message }) => message),
+    { role: 'assistant', content: answer },
+    { role: 'user', content: complaint },
+  ];
 
   for (let attempt = 0; attempt <= repairAttempts; attempt += 1) {
     const response = await complete({
@@ -315,8 +336,10 @@ export async function completeJson<T>(options: JsonCompleteOptions<T>): Promise<
         parsed = JSON.parse(json);
       } catch (error) {
         lastIssues = `not valid JSON: ${(error as Error).message}`;
-        messages.push({ role: 'assistant', content: response.text.slice(0, 2000) });
-        messages.push({ role: 'user', content: `That response was ${lastIssues}. Reply with a single valid JSON object only.` });
+        messages = repairConversation(
+          response.text,
+          `That response was ${lastIssues}. Reply with a single valid JSON object only.`,
+        );
         continue;
       }
       const validated = options.schema.safeParse(parsed);
@@ -325,17 +348,25 @@ export async function completeJson<T>(options: JsonCompleteOptions<T>): Promise<
         .slice(0, 12)
         .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
         .join('; ');
-      log.warn('model output failed schema validation; requesting repair', { task: options.task, attempt, issues: lastIssues });
-      messages.push({ role: 'assistant', content: response.text.slice(0, 4000) });
-      messages.push({
-        role: 'user',
-        content: `The JSON did not satisfy the required schema. Fix exactly these problems and return the complete corrected JSON object only:\n${lastIssues}`,
+      // The raw answer goes in the log alongside the issues. Without it a
+      // contract failure says only which field was missing, and the field that
+      // is missing is never the interesting part — the shape the model chose
+      // instead is, and that shape is what the normaliser has to learn to
+      // accept so the same money is not spent on the same retry again.
+      log.warn('model output failed schema validation; requesting repair', {
+        task: options.task,
+        attempt,
+        issues: lastIssues,
+        raw: json.slice(0, 600),
       });
+      messages = repairConversation(
+        response.text,
+        `The JSON did not satisfy the required schema. Fix exactly these problems and return the complete corrected JSON object only:\n${lastIssues}`,
+      );
       continue;
     }
     lastIssues = 'response contained no JSON value';
-    messages.push({ role: 'assistant', content: response.text.slice(0, 2000) });
-    messages.push({ role: 'user', content: 'Reply with a single valid JSON object and nothing else.' });
+    messages = repairConversation(response.text, 'Reply with a single valid JSON object and nothing else.');
   }
 
   throw new JsonContractError(options.task, lastIssues, lastRaw.slice(0, 4000));

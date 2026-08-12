@@ -43,16 +43,149 @@ const log = createLogger('generation.review.critic');
  * is unambiguous. A missing score or a missing criteria list is not repaired,
  * because inventing either would be inventing the review itself.
  */
+/** The first of these keys that carries a usable value, or undefined. */
+function pick(source: Record<string, unknown>, keys: readonly string[]): unknown {
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+}
+
+function asText(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim().length > 0) return value;
+  return undefined;
+}
+
+/**
+ * Maps whatever word the reviewer used for how bad something is onto the three
+ * the schema knows. An unrecognised word is treated as significant rather than
+ * dropped: a problem the reviewer bothered to write down is not minor by
+ * default, and guessing "minor" would silently delete it from the repair list.
+ */
+function asSeverity(value: unknown): 'minor' | 'significant' | 'severe' {
+  const word = String(value ?? '').trim().toLowerCase();
+  if (['minor', 'low', 'small', 'cosmetic', 'trivial', 'nitpick'].includes(word)) return 'minor';
+  if (['severe', 'high', 'critical', 'blocker', 'blocking', 'fatal', 'major'].includes(word)) return 'severe';
+  return 'significant';
+}
+
+/** Maps a per-criterion answer onto PASS / FAIL / PARTIAL. */
+function asCriterionVerdict(value: unknown): string | undefined {
+  if (typeof value === 'boolean') return value ? 'PASS' : 'FAIL';
+  const word = String(value ?? '').trim().toUpperCase();
+  if (word.length === 0) return undefined;
+  if (['PASS', 'PASSED', 'YES', 'TRUE', 'MET', 'OK'].includes(word)) return 'PASS';
+  if (['FAIL', 'FAILED', 'NO', 'FALSE', 'NOT MET', 'UNMET', 'MISSING'].includes(word)) return 'FAIL';
+  if (['PARTIAL', 'PARTIALLY', 'PARTIALLY MET', 'PARTIAL PASS', 'WEAK', 'MARGINAL'].includes(word)) return 'PARTIAL';
+  return undefined;
+}
+
+/** A number written as a number, as "34", or as "34/100". */
+function asScore(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const match = /-?\d+(\.\d+)?/.exec(value);
+    if (match) {
+      const parsed = Number(match[0]);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
 function normaliseVerdict(value: unknown): unknown {
   if (typeof value !== 'object' || value === null) return value;
-  const raw = { ...(value as Record<string, unknown>) };
+  let raw = { ...(value as Record<string, unknown>) };
 
-  if (raw.additionalProblems === undefined && raw.otherProblems !== undefined) {
-    raw.additionalProblems = raw.otherProblems;
+  // Some answers arrive wrapped: { review: { … } }, { verdict: { … } }. The
+  // wrapper is not a review, so unwrap it before anything else looks at it.
+  for (const wrapper of ['review', 'verdict', 'result', 'assessment']) {
+    const inner = raw[wrapper];
+    if (
+      Object.keys(raw).length === 1 &&
+      typeof inner === 'object' &&
+      inner !== null &&
+      !Array.isArray(inner)
+    ) {
+      raw = { ...(inner as Record<string, unknown>) };
+      break;
+    }
   }
-  if (raw.silhouetteNotes === undefined && typeof raw.silhouette === 'string') {
-    raw.silhouetteNotes = raw.silhouette;
+
+  const criteria = pick(raw, ['criteria', 'acceptanceCriteria', 'acceptance', 'criteriaResults', 'checks']);
+  if (Array.isArray(criteria)) {
+    raw.criteria = criteria.map((entry) => {
+      if (typeof entry !== 'object' || entry === null) return entry;
+      const item = { ...(entry as Record<string, unknown>) };
+      const criterion = asText(pick(item, ['criterion', 'name', 'text', 'check', 'id', 'description']));
+      const verdictWord = asCriterionVerdict(pick(item, ['verdict', 'result', 'status', 'assessment', 'outcome', 'met', 'pass', 'passed']));
+      const observation = asText(pick(item, ['observation', 'observed', 'notes', 'note', 'evidence', 'comment', 'reason']));
+      if (criterion !== undefined) item.criterion = criterion;
+      if (verdictWord !== undefined) item.verdict = verdictWord;
+      if (observation !== undefined) item.observation = observation;
+      return item;
+    });
   }
+
+  const missing = pick(raw, ['missingFeatures', 'missing', 'absentFeatures', 'notFound']);
+  if (Array.isArray(missing)) {
+    raw.missingFeatures = missing
+      .map((entry) =>
+        typeof entry === 'string'
+          ? entry
+          : typeof entry === 'object' && entry !== null
+            ? asText(pick(entry as Record<string, unknown>, ['feature', 'name', 'description', 'text', 'problem']))
+            : undefined,
+      )
+      .filter((entry): entry is string => typeof entry === 'string');
+  }
+
+  // A reviewer that writes its extra problems as sentences has still reported
+  // them, and a reviewer that calls the field `impact` instead of `severity` has
+  // still graded them. Both were rejected before this, at the price of a whole
+  // re-review each time.
+  const problems = pick(raw, ['additionalProblems', 'otherProblems', 'problems', 'issues', 'otherIssues', 'observations']);
+  if (Array.isArray(problems)) {
+    raw.additionalProblems = problems
+      .map((entry) => {
+        if (typeof entry === 'string') {
+          return entry.trim().length > 0 ? { problem: entry, severity: 'significant' } : undefined;
+        }
+        if (typeof entry !== 'object' || entry === null) return undefined;
+        const item = entry as Record<string, unknown>;
+        const problem = asText(pick(item, ['problem', 'issue', 'description', 'text', 'summary', 'note', 'observation', 'title']));
+        if (!problem) return undefined;
+        const step = asText(pick(item, ['step', 'stepId', 'step_id', 'blame', 'responsibleStep']));
+        return {
+          problem,
+          ...(step ? { step } : {}),
+          severity: asSeverity(pick(item, ['severity', 'impact', 'seriousness', 'priority'])),
+        };
+      })
+      .filter((entry) => entry !== undefined);
+  }
+
+  const silhouette = raw.silhouette;
+  if (typeof silhouette === 'string') {
+    if (raw.silhouetteNotes === undefined) raw.silhouetteNotes = silhouette;
+  } else if (typeof silhouette === 'object' && silhouette !== null) {
+    const item = silhouette as Record<string, unknown>;
+    if (raw.silhouetteNotes === undefined) raw.silhouetteNotes = pick(item, ['notes', 'note', 'observation', 'description']);
+    if (raw.silhouetteReads === undefined) raw.silhouetteReads = pick(item, ['reads', 'readsAsSubject', 'recognisable', 'pass']);
+  }
+  if (raw.silhouetteReads === undefined) {
+    const alias = pick(raw, ['silhouetteReadsAsSubject', 'silhouetteRecognisable', 'silhouettePasses']);
+    if (alias !== undefined) raw.silhouetteReads = alias;
+  }
+  if (typeof raw.silhouetteReads === 'string') {
+    const word = raw.silhouetteReads.trim().toLowerCase();
+    if (['yes', 'true', 'pass'].includes(word)) raw.silhouetteReads = true;
+    else if (['no', 'false', 'fail'].includes(word)) raw.silhouetteReads = false;
+  }
+
+  const score = asScore(pick(raw, ['score', 'overallScore', 'overall_score', 'finalScore', 'totalScore', 'rating', 'grade']));
+  if (score !== undefined) raw.score = Math.max(0, Math.min(100, score));
 
   if (typeof raw.summary !== 'string' || raw.summary.trim().length === 0) {
     // Built from what the reviewer did write: the criteria it failed, which is
@@ -149,7 +282,24 @@ BEING USEFUL
 - Judge against the brief, not against your own taste. If the brief asks for a stylised object, do not fail it for not being photoreal.
 - Do not pass something because it is close. This asset ships into a game; a reviewer who waves things through is why generated content looks generated.
 - Do not fail something for a quality the brief did not ask for.
-- Score honestly. 90+ means it satisfies the brief and would not embarrass anyone. 70-89 means it reads correctly with visible flaws. Below 70 means it does not yet depict what was asked for.`;
+- Score honestly. 90+ means it satisfies the brief and would not embarrass anyone. 70-89 means it reads correctly with visible flaws. Below 70 means it does not yet depict what was asked for.
+
+THE ANSWER
+
+Return one JSON object with exactly these keys. All of them are required; a review missing one is rejected and has to be done again from the same pictures.
+
+  criteria            array, one entry per acceptance criterion in the order given, each
+                      { "criterion": string, "verdict": "PASS" | "FAIL" | "PARTIAL", "observation": string }
+  missingFeatures     array of strings — mustRead features you cannot find in any view
+  additionalProblems  array of { "problem": string, "step": string (optional), "severity": "minor" | "significant" | "severe" }
+  silhouetteReads     boolean — does the black outline read as the subject
+  silhouetteNotes     string — what the outline actually reads as
+  score               number, 0-100
+  summary             string — two or three sentences
+
+Keep each observation to a couple of sentences. The review is read by a repair
+step, not by a person, and an answer that runs past the output limit is
+discarded whole.`;
 
 export interface ReviewInput {
   readonly recipe: AssetRecipe;

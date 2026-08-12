@@ -453,6 +453,8 @@ export interface GlbSummary {
   readonly jsonLength: number;
   readonly binaryLength: number;
   readonly meshes: number;
+  /** Scene nodes. A composed scene has one per placed part; a single asset has one. */
+  readonly nodes: number;
   readonly materials: number;
   readonly textures: number;
   readonly skins: number;
@@ -474,6 +476,7 @@ export function inspectGlb(data: Buffer): GlbSummary {
   const json = JSON.parse(data.toString('utf8', 20, 20 + jsonLength)) as {
     asset?: { generator?: string };
     meshes?: Array<{ primitives: Array<{ indices: number; attributes: Record<string, number> }> }>;
+    nodes?: unknown[];
     materials?: unknown[];
     textures?: unknown[];
     skins?: unknown[];
@@ -500,6 +503,7 @@ export function inspectGlb(data: Buffer): GlbSummary {
     jsonLength,
     binaryLength,
     meshes: json.meshes?.length ?? 0,
+    nodes: json.nodes?.length ?? 0,
     materials: json.materials?.length ?? 0,
     textures: json.textures?.length ?? 0,
     skins: json.skins?.length ?? 0,
