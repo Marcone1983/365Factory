@@ -263,18 +263,30 @@ async function main(): Promise<void> {
   fs.mkdirSync(glbDir, { recursive: true });
 
   // Generate first, so the server can serve real files.
-  const subjects = ONLY === 'recipes' ? [] : ONLY ? SUBJECTS.filter((s) => s.name === ONLY || s.kind === ONLY) : SUBJECTS;
-  if (subjects.length === 0 && ONLY !== 'recipes') throw new Error(`no subject matches "${ONLY ?? ''}"`);
+  const isRecipeName = ONLY ? RECIPE_EXAMPLES.some((e) => e.recipe.name === ONLY) : false;
+  const subjects =
+    ONLY === 'recipes' || isRecipeName ? [] : ONLY ? SUBJECTS.filter((s) => s.name === ONLY || s.kind === ONLY) : SUBJECTS;
+  if (subjects.length === 0 && ONLY !== 'recipes' && !isRecipeName) {
+    throw new Error(`no subject matches "${ONLY ?? ''}"`);
+  }
 
   const generated: Array<{ subject: Subject; file: string; stats: Record<string, unknown> }> = [];
 
   // Recipes render alongside the hand-written generators, because the whole
   // point is that they are the same kind of asset by the time they reach a game.
-  if (!ONLY || ONLY === 'recipes') {
+  const recipeFilter = ONLY && ONLY !== 'recipes' ? ONLY : null;
+  if (!ONLY || ONLY === 'recipes' || RECIPE_EXAMPLES.some((e) => e.recipe.name === ONLY)) {
     for (const example of RECIPE_EXAMPLES) {
+      if (recipeFilter && example.recipe.name !== recipeFilter) continue;
       process.stdout.write(`building recipe "${example.recipe.name}"…\n`);
+      // Each example carries its own palette: a dark-green utility vehicle and a
+      // crimson hypercar cannot share one.
+      const palette =
+        example.recipe.name === 'trail_utility_4x4'
+          ? ['#4e7a52', '#2a2f2a', '#aeb8c4', '#0d1116', '#ffe9b8', '#15150f', '#1a1a14']
+          : ['#8c1230', '#ff3355', '#c9d1de', '#101418', '#8892a0', '#555a63', '#17171b'];
       const built = buildAssetFromRecipe(example.recipe, {
-        palette: ['#8c1230', '#ff3355', '#c9d1de', '#101418', '#8892a0', '#555a63', '#17171b'],
+        palette,
         seed: 4242,
         textureSize: 1024,
       });

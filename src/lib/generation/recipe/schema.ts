@@ -133,7 +133,7 @@ const TransformSchema = z.object({
  * when a render comes back wrong, the note is what identifies which step is
  * responsible for the part that is wrong.
  */
-const noteField = z.string().min(8).max(300);
+const noteField = z.string().min(8).max(600);
 
 /** A named part the recipe builds and can then reference, array or cut with. */
 const StepSchema = z.discriminatedUnion('op', [
