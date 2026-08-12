@@ -478,6 +478,10 @@ export function csg(a: PolyMesh, b: PolyMesh, operation: BooleanOperation): Poly
   // be wholly contained in the other — a case the culling reasoning above does
   // not cover, because the containing solid's *surface* is far from the
   // contained one while its *volume* is not. The full BSP decides it.
+  // One operand's surface entirely outside the other's box means one solid may
+  // be wholly contained in the other — a case the culling reasoning above does
+  // not cover, because the containing solid's *surface* is far from the
+  // contained one while its *volume* is not. The full BSP decides it.
   if (nearA.length === 0 || nearB.length === 0) {
     return fromPolygons(csgExact(polygonsA, polygonsB, operation));
   }

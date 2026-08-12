@@ -7,6 +7,41 @@ distinctive weapons, characters that read as people.
 That rules out the usual approach of composing primitives. What follows is
 surface modelling — the same operations a modeller actually uses.
 
+## Shading and occlusion
+
+Three things decide whether a generated asset reads as an object or as plastic,
+and none of them is triangle count.
+
+**Baked ambient occlusion.** Every asset built from a recipe is ray-traced
+against itself — 64 cosine-weighted rays per vertex through a surface-area
+heuristic BVH (`src/lib/graphics/bvh.ts`, `occlusion.ts`) — and the result is
+written to vertex colours, which glTF multiplies into the base colour. That is
+what puts shadow in an eye socket, under a chin, between fingers and up inside a
+wheel arch. It travels in three floats per vertex and needs no second UV set, no
+lightmap atlas and no unwrap; an unwrap is precisely the step that would have to
+be correct for a baked AO *texture* to be worth having.
+
+**Area-weighted vertex normals, measured against the surface bulk.** A boolean
+leaves a few large faces surrounded by many slivers whose normals are numerically
+meaningless. Counting each face equally lets a sliver a thousandth of the size
+swing the vertex normal as hard as the surface it sits on, and comparing the
+smoothing angle pairwise lets one folded micro-face split the shading of every
+face it touches. Both are fixed in `triangulate`: contributions are weighted by
+area, slivers are excluded outright, and each face is tested against the
+area-weighted bulk normal at the vertex rather than against its neighbours one at
+a time.
+
+**Normal maps normalised by measured gradient.** The Sobel response of a height
+field depends on both the map's resolution and the frequency of whatever the
+material happened to build, so a fixed coefficient bakes normals eight times too
+strong at one scale and invisible at another. The synthesiser measures the
+field's own mean gradient and normalises against it, which makes `relief` mean
+one thing — how far the surface tilts — for every material at every resolution.
+Height fields are also held below the map's Nyquist limit and supersampled where
+the pattern is periodic, because a weave finer than four texels per cycle comes
+back as moiré rather than as cloth.
+
+
 ## Mesh kernel
 
 `src/lib/graphics/mesh-kernel.ts`

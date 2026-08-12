@@ -368,6 +368,15 @@ export const AssetRecipeSchema = z.object({
   targetSize: Vec3Schema,
   /** Higher values subdivide more; bounded because cost is 4^level. */
   smoothness: z.number().int().min(0).max(2).default(1),
+  /**
+   * Relaxation passes after subdivision, for organic forms built by unioning
+   * volumes. A boolean between two smooth surfaces leaves a real crease along
+   * their intersection — correct as geometry, wrong as anatomy — and relaxation
+   * dissolves it while leaving edges sharper than `relaxPreserveAngleDegrees`
+   * alone. Leave at 0 for hard-surface assets, where every crease is intended.
+   */
+  relax: z.number().int().min(0).max(4).default(0),
+  relaxPreserveAngleDegrees: finite(5, 175).default(42),
   /** Angle above which an edge stays hard when normals are computed. */
   smoothAngleDegrees: finite(1, 180).default(50),
   uvProjection: z.enum(['box', 'cylindrical']).default('box'),

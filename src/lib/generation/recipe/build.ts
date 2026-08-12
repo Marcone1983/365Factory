@@ -3,6 +3,7 @@ import { generateTextureSet, linearFactor, recipeFor } from '../pbr';
 import { seedFrom } from '@/lib/util/random';
 import { createLogger } from '@/lib/observability/logger';
 import { interpretRecipe } from './interpreter';
+import { bakeVertexOcclusion, occlusionToVertexColors } from '@/lib/graphics/occlusion';
 import type { AssetRecipe } from './schema';
 
 const log = createLogger('generation.recipe');
@@ -24,7 +25,14 @@ export interface BuiltAsset {
   readonly materialCount: number;
   readonly textureCount: number;
   readonly warnings: readonly string[];
-  readonly stats: { readonly steps: number; readonly vertices: number; readonly durationMs: number };
+  readonly stats: {
+    readonly steps: number;
+    readonly vertices: number;
+    readonly durationMs: number;
+    /** How long the occlusion bake took, and how many rays it traced. */
+    readonly occlusionMs: number;
+    readonly occlusionRays: number;
+  };
 }
 
 export interface BuildOptions {
@@ -32,6 +40,13 @@ export interface BuildOptions {
   readonly palette: readonly string[];
   readonly seed?: number;
   readonly textureSize?: number;
+  /**
+   * Baked ambient occlusion. On by default: without it nothing darkens where two
+   * surfaces meet and every asset reads as plastic, whatever its silhouette. Set
+   * `samples` low for a draft and high for a hero asset; turning it off entirely
+   * is for isolating a fault, not for saving time.
+   */
+  readonly occlusion?: { readonly enabled?: boolean; readonly samples?: number; readonly intensity?: number };
 }
 
 export function buildAssetFromRecipe(recipe: AssetRecipe, options: BuildOptions): BuiltAsset {
@@ -94,11 +109,33 @@ export function buildAssetFromRecipe(recipe: AssetRecipe, options: BuildOptions)
     materials.push(material as unknown as GltfMaterial);
   }
 
+  // Occlusion is baked once over the whole assembled mesh, not per material
+  // group: a shadow does not stop at a material boundary, and the chin that
+  // shadows the neck is skin shadowing fabric.
+  let colors: Float32Array | undefined;
+  let occlusionMs = 0;
+  let occlusionRays = 0;
+  if (options.occlusion?.enabled !== false) {
+    const baked = bakeVertexOcclusion(
+      result.triangulated.positions,
+      result.triangulated.normals,
+      result.triangulated.indices,
+      {
+        samples: options.occlusion?.samples ?? 64,
+        ...(options.occlusion?.intensity !== undefined ? { intensity: options.occlusion.intensity } : {}),
+      },
+    );
+    colors = occlusionToVertexColors(baked.occlusion);
+    occlusionMs = baked.stats.durationMs;
+    occlusionRays = baked.stats.rays;
+  }
+
   const primitives: MeshPrimitiveData[] = result.triangulated.materialGroups.map((group) => ({
     name: `${recipe.name}_mat${group.material}`,
     positions: result.triangulated.positions,
     normals: result.triangulated.normals,
     uvs: result.triangulated.uvs,
+    ...(colors ? { colors } : {}),
     indices: result.triangulated.indices.slice(group.start, group.start + group.count),
     materialIndex: group.material,
   }));
@@ -124,6 +161,6 @@ export function buildAssetFromRecipe(recipe: AssetRecipe, options: BuildOptions)
     materialCount: materials.length,
     textureCount: textures.length,
     warnings,
-    stats: result.stats,
+    stats: { ...result.stats, occlusionMs, occlusionRays },
   };
 }

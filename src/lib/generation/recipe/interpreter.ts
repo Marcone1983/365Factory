@@ -5,6 +5,7 @@ import {
   projectCylindricalUvs,
   revolve,
   roundedRectProfile,
+  relax,
   subdivide,
   superellipseProfile,
   triangulate,
@@ -406,7 +407,18 @@ export function interpretRecipe(recipe: AssetRecipe, options: { seed?: number } 
   if (recipe.uvProjection === 'cylindrical') projectCylindricalUvs(assembled, recipe.uvScale);
   else projectBoxUvs(assembled, recipe.uvScale);
 
-  const smoothed = subdivide(assembled, recipe.smoothness);
+  // Relaxation runs on the control cage, before subdivision.
+  //
+  // The artefacts it exists to remove are in the cage: a boolean leaves needle
+  // faces and repaired T-junctions whose vertices sit a few microns off the
+  // surface, and Catmull-Clark reproduces that noise faithfully at four times
+  // the density. Smoothing afterwards means fighting a fold that subdivision has
+  // already committed to, over four times as many vertices.
+  const relaxed =
+    recipe.relax > 0
+      ? relax(assembled, { iterations: recipe.relax, preserveAngleDegrees: recipe.relaxPreserveAngleDegrees })
+      : assembled;
+  const smoothed = subdivide(relaxed, recipe.smoothness);
   const triangulated = triangulate(smoothed, { smoothAngleDegrees: recipe.smoothAngleDegrees });
   const triangleCount = triangulated.indices.length / 3;
 

@@ -380,6 +380,103 @@ export function subdivide(mesh: PolyMesh, levels: number): PolyMesh {
   return current;
 }
 
+export interface RelaxOptions {
+  /** Passes of the λ/μ pair. Two is enough to take the edge off a boolean seam. */
+  readonly iterations?: number;
+  /** Inward step. Larger smooths faster and distorts more. */
+  readonly lambda?: number;
+  /**
+   * Outward step. Taubin's method follows every shrinking pass with a slightly
+   * larger expanding one, which is what separates it from plain Laplacian
+   * smoothing: Laplacian smoothing works, and it deflates the model while it
+   * works, so a face smoothed enough to lose its seams has also lost its nose.
+   */
+  readonly mu?: number;
+  /**
+   * Edges meeting at more than this angle are treated as intended features and
+   * their vertices are left alone. Without it a panel gap, a chamfer or the rim
+   * of a wheel arch dissolves along with the artefacts.
+   */
+  readonly preserveAngleDegrees?: number;
+}
+
+/**
+ * Taubin λ/μ relaxation, feature-preserving.
+ *
+ * Booleans leave creases where two surfaces cross that are real geometry but
+ * not intended form: the union of a jaw and a skull is one solid, and the ridge
+ * along their intersection is an artefact of how it was built rather than
+ * anything anatomical. Subdivision does not remove it — it is a genuine crease
+ * in the control mesh, so subdivision faithfully reproduces it — and the render
+ * shows it as a hard wedge across an otherwise smooth cheek.
+ *
+ * Relaxation moves each vertex toward the average of its neighbours, which
+ * dissolves exactly that kind of high-frequency ridge while leaving the broad
+ * form alone. The angle test is what keeps it honest: a vertex sitting on an
+ * edge sharper than the threshold is a corner someone asked for, and it does
+ * not move.
+ */
+export function relax(mesh: PolyMesh, options: RelaxOptions = {}): PolyMesh {
+  const iterations = Math.max(0, Math.min(8, options.iterations ?? 2));
+  if (iterations === 0 || mesh.vertices.length === 0) return mesh;
+  const lambda = options.lambda ?? 0.5;
+  const mu = options.mu ?? -0.53;
+  const threshold = Math.cos(((options.preserveAngleDegrees ?? 42) * Math.PI) / 180);
+
+  const out = mesh.clone();
+
+  // Neighbours, and the faces each vertex belongs to, computed once.
+  const neighbours: Set<number>[] = out.vertices.map(() => new Set<number>());
+  const vertexFaces: number[][] = out.vertices.map(() => []);
+  out.faces.forEach((face, faceIndex) => {
+    const ring = face.vertices;
+    for (let i = 0; i < ring.length; i += 1) {
+      const current = ring[i] as number;
+      const next = ring[(i + 1) % ring.length] as number;
+      (neighbours[current] as Set<number>).add(next);
+      (neighbours[next] as Set<number>).add(current);
+      (vertexFaces[current] as number[]).push(faceIndex);
+    }
+  });
+
+  // A vertex is pinned when any two faces around it disagree by more than the
+  // threshold. Computed against the original mesh so the pinned set cannot
+  // wander as the surface relaxes.
+  const normals = out.faces.map((face) => faceNormal(out, face));
+  const pinned = out.vertices.map((_, index) => {
+    const faces = vertexFaces[index] as number[];
+    for (let i = 0; i < faces.length; i += 1) {
+      for (let j = i + 1; j < faces.length; j += 1) {
+        if (dot(normals[faces[i] as number] as Vec3, normals[faces[j] as number] as Vec3) < threshold) return true;
+      }
+    }
+    // A boundary vertex — fewer faces than neighbours — is an edge of an open
+    // surface and moving it opens a gap against whatever it meets.
+    return faces.length < (neighbours[index] as Set<number>).size;
+  });
+
+  const step = (factor: number): void => {
+    const moved: Vec3[] = out.vertices.map((vertex, index) => {
+      if (pinned[index]) return vertex.position;
+      const ring = neighbours[index] as Set<number>;
+      if (ring.size === 0) return vertex.position;
+      let sum = v3();
+      for (const other of ring) sum = add(sum, (out.vertices[other] as Vertex).position);
+      const average = scale(sum, 1 / ring.size);
+      return add(vertex.position, scale(sub(average, vertex.position), factor));
+    });
+    out.vertices.forEach((vertex, index) => {
+      vertex.position = moved[index] as Vec3;
+    });
+  };
+
+  for (let i = 0; i < iterations; i += 1) {
+    step(lambda);
+    step(mu);
+  }
+  return out;
+}
+
 // ------------------------------------------------------------ construction --
 
 export interface Station {
@@ -571,6 +668,27 @@ export function triangulate(mesh: PolyMesh, options: { smoothAngleDegrees?: numb
   const threshold = Math.cos(((options.smoothAngleDegrees ?? 62) * Math.PI) / 180);
 
   const faceNormals = mesh.faces.map((face) => faceNormal(mesh, face));
+  // Face normals are averaged by area, not by count. A boolean leaves a few
+  // large faces surrounded by many slivers, and counting each one equally lets a
+  // sliver a thousandth of the size swing the vertex normal as hard as the
+  // surface it sits on. That is what shows up as patchwork shading on an
+  // otherwise smooth form — flat-looking polygonal blotches across a cheek that
+  // no amount of extra geometry removes, because the geometry was never the
+  // problem.
+  const faceAreas = mesh.faces.map((face) => faceArea(mesh, face));
+
+  // Slivers are excluded from normal computation altogether, not merely
+  // down-weighted. A boolean leaves faces a millionth the area of their
+  // neighbours whose vertices are nearly collinear, and the normal of such a
+  // face is numerically meaningless — it is the cross product of two almost
+  // parallel edges. Down-weighting fixes the *average*; it does not fix the
+  // smoothing-angle test, which compares against that meaningless normal and
+  // concludes that a smooth cheek contains a 70-degree crease. That is what
+  // produced the flat wedges across the face, and no amount of extra geometry
+  // removed them because the geometry was never wrong.
+  const meanArea = faceAreas.length > 0 ? faceAreas.reduce((sum, area) => sum + area, 0) / faceAreas.length : 0;
+  const sliverArea = meanArea * 1e-4;
+  const isSliver = faceAreas.map((area) => area <= sliverArea);
   const vertexFaceMap: number[][] = mesh.vertices.map(() => []);
   mesh.faces.forEach((face, faceIndex) => {
     for (const index of face.vertices) (vertexFaceMap[index] as number[]).push(faceIndex);
@@ -584,6 +702,18 @@ export function triangulate(mesh: PolyMesh, options: { smoothAngleDegrees?: numb
   const indices: number[] = [];
   const groups: Array<{ material: number; start: number; count: number }> = [];
 
+  // The surface normal at each vertex: every incident face, weighted by area,
+  // with no threshold. This is the *bulk* direction of the surface there, and it
+  // is what the smoothing test is measured against below.
+  const vertexNormals: Vec3[] = mesh.vertices.map((_, index) => {
+    let accumulated = v3();
+    for (const faceIndex of vertexFaceMap[index] as number[]) {
+      if (isSliver[faceIndex]) continue;
+      accumulated = add(accumulated, scale(faceNormals[faceIndex] as Vec3, faceAreas[faceIndex] as number));
+    }
+    return length(accumulated) > 1e-12 ? normalize(accumulated) : v3(0, 1, 0);
+  });
+
   // Emit per material so the exporter can produce one primitive per material.
   const materials = [...new Set(mesh.faces.map((f) => f.material))].sort((a, b) => a - b);
   const emitted = new Map<string, number>();
@@ -592,21 +722,36 @@ export function triangulate(mesh: PolyMesh, options: { smoothAngleDegrees?: numb
     const start = indices.length;
     mesh.faces.forEach((face, faceIndex) => {
       if (face.material !== material) return;
-      const normal = faceNormals[faceIndex] as Vec3;
       const corner: number[] = [];
+      const normal = faceNormals[faceIndex] as Vec3;
 
       for (const vertexIndex of face.vertices) {
-        // Average only the neighbours whose normal is within the smoothing angle.
-        let accumulated = v3();
-        let contributors = 0;
-        for (const neighbourFace of vertexFaceMap[vertexIndex] as number[]) {
-          const neighbourNormal = faceNormals[neighbourFace] as Vec3;
-          if (dot(neighbourNormal, normal) >= threshold) {
-            accumulated = add(accumulated, neighbourNormal);
-            contributors += 1;
+        // The face is compared against the *bulk* normal at this vertex rather
+        // than against each neighbour in turn. That distinction is the whole
+        // fix: comparing pairwise, one folded micro-face out of forty is enough
+        // to fail the test for a face that lies flat on the surface, and every
+        // face it touches then gets its own restricted average. On a boolean
+        // result — which has thousands of such folds — that scattered a smooth
+        // cheek into flat wedges. Measured against the bulk direction, a fold
+        // cannot drag its neighbours with it: it is excluded, and the surface
+        // around it stays one continuous shading group.
+        const bulk = vertexNormals[vertexIndex] as Vec3;
+        let smoothed: Vec3;
+        if (dot(normal, bulk) >= threshold) {
+          smoothed = bulk;
+        } else {
+          // A genuine hard edge: this face really does face a different way from
+          // the bulk of the surface, so it averages only its own side.
+          let accumulated = v3();
+          for (const neighbourFace of vertexFaceMap[vertexIndex] as number[]) {
+            if (isSliver[neighbourFace]) continue;
+            const neighbourNormal = faceNormals[neighbourFace] as Vec3;
+            if (dot(neighbourNormal, normal) >= threshold) {
+              accumulated = add(accumulated, scale(neighbourNormal, faceAreas[neighbourFace] as number));
+            }
           }
+          smoothed = length(accumulated) > 1e-12 ? normalize(accumulated) : normal;
         }
-        const smoothed = contributors > 0 ? normalize(accumulated) : normal;
         const key = `${vertexIndex}|${smoothed.x.toFixed(3)}|${smoothed.y.toFixed(3)}|${smoothed.z.toFixed(3)}`;
         let emittedIndex = emitted.get(key);
         if (emittedIndex === undefined) {
@@ -643,6 +788,19 @@ export function triangulate(mesh: PolyMesh, options: { smoothAngleDegrees?: numb
     weights: hasSkin ? Float32Array.from(weights) : undefined,
     materialGroups: groups,
   };
+}
+
+/** Polygon area by fan decomposition; used to weight normal averaging. */
+function faceArea(mesh: PolyMesh, face: Face): number {
+  if (face.vertices.length < 3) return 0;
+  const origin = (mesh.vertices[face.vertices[0] as number] as Vertex).position;
+  let total = 0;
+  for (let i = 1; i + 1 < face.vertices.length; i += 1) {
+    const a = (mesh.vertices[face.vertices[i] as number] as Vertex).position;
+    const b = (mesh.vertices[face.vertices[i + 1] as number] as Vertex).position;
+    total += length(cross(sub(a, origin), sub(b, origin))) / 2;
+  }
+  return total;
 }
 
 function faceNormal(mesh: PolyMesh, face: Face): Vec3 {

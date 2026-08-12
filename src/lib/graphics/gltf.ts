@@ -14,6 +14,12 @@ export interface MeshPrimitiveData {
   readonly normals: Float32Array;
   readonly uvs?: Float32Array;
   readonly tangents?: Float32Array;
+  /**
+   * RGBA per vertex, multiplied into the base colour by every glTF renderer.
+   * This is where baked ambient occlusion travels: it needs no second UV set and
+   * no lightmap atlas, which means it needs no unwrap to be correct.
+   */
+  readonly colors?: Float32Array;
   readonly joints?: Uint16Array;
   readonly weights?: Float32Array;
   readonly indices: Uint32Array;
@@ -197,6 +203,9 @@ export function writeGlb(input: GlbInput): Buffer {
       if (primitive.uvs && primitive.uvs.length !== vertexCount * 2) {
         throw new Error(`glTF export: uv count mismatch in "${primitive.name}"`);
       }
+      if (primitive.colors && primitive.colors.length !== vertexCount * 4) {
+        throw new Error(`glTF export: vertex colour count mismatch in "${primitive.name}"`);
+      }
       if (primitive.joints && primitive.joints.length !== vertexCount * 4) {
         throw new Error(`glTF export: joint count mismatch in "${primitive.name}"`);
       }
@@ -228,6 +237,14 @@ export function writeGlb(input: GlbInput): Buffer {
           componentType: COMPONENT_FLOAT,
           count: vertexCount,
           type: 'VEC2',
+        });
+      }
+      if (primitive.colors) {
+        attributes.COLOR_0 = pushAccessor({
+          bufferView: pushView(typedBuffer(primitive.colors), TARGET_ARRAY_BUFFER),
+          componentType: COMPONENT_FLOAT,
+          count: vertexCount,
+          type: 'VEC4',
         });
       }
       if (primitive.tangents) {
