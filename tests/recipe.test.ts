@@ -368,3 +368,107 @@ function frontmostZ(mesh: { vertices: ReadonlyArray<{ position: { x: number; y: 
   }
   return front;
 }
+
+/**
+ * Sculpting is what an organic form needs and a boolean cannot give it: a face
+ * is one continuous surface in which the nose and the brow are swellings of the
+ * same skin, not volumes fused onto a blob. These check the properties the
+ * operator has to have to be usable — it moves the surface where the brush is,
+ * it leaves it alone where the brush is not, and the result does not depend on
+ * the order the brushes are listed in.
+ */
+describe('the sculpt operator', () => {
+  const base = AssetRecipeSchema.parse({
+    ...LANTERN,
+    name: 'sculpt_fixture',
+    targetSize: [0, 0, 0],
+    smoothness: 0,
+    steps: [
+      {
+        op: 'primitive',
+        id: 'ball',
+        note: 'A sphere to push around; the fixture has no meaning beyond that.',
+        shape: 'sphere',
+        centre: [0, 0, 0],
+        radius: 1,
+        segments: 32,
+        material: 'iron',
+      },
+    ],
+    outputs: ['ball'],
+  });
+
+  function sculpted(brushes: unknown[]): ReturnType<typeof interpretRecipe> {
+    return interpretRecipe(
+      AssetRecipeSchema.parse({
+        ...base,
+        steps: [
+          ...base.steps,
+          { op: 'sculpt', id: 'shaped', note: 'The fixture, sculpted.', source: 'ball', refine: 1, brushes },
+        ],
+        outputs: ['shaped'],
+      }),
+    );
+  }
+
+  const NOSE = {
+    note: 'A swell on the +Z pole.',
+    at: [0, 0, 1],
+    radii: [0.4, 0.4, 0.4],
+    strength: 0.25,
+    falloff: 'smooth',
+    direction: [0, 0, 1],
+  };
+
+  it('pushes the surface out where the brush reaches', () => {
+    const plain = interpretRecipe(base);
+    const bumped = sculpted([NOSE]);
+
+    const reach = (result: ReturnType<typeof interpretRecipe>): number => {
+      let front = -Infinity;
+      for (const vertex of result.mesh.vertices) {
+        if (Math.hypot(vertex.position.x, vertex.position.y) > 0.2) continue;
+        front = Math.max(front, vertex.position.z);
+      }
+      return front;
+    };
+    expect(reach(bumped)).toBeGreaterThan(reach(plain) + 0.2);
+  });
+
+  it('leaves the surface outside the brush untouched', () => {
+    const farPole = (brushes: unknown[]): number => {
+      let back = Infinity;
+      for (const vertex of sculpted(brushes).mesh.vertices) {
+        if (Math.hypot(vertex.position.x, vertex.position.y) > 0.2) continue;
+        back = Math.min(back, vertex.position.z);
+      }
+      return back;
+    };
+    // Compared against the same refinement with the brush turned off, not
+    // against the raw sphere: subdivision moves the surface too, and the claim
+    // here is about the brush.
+    expect(farPole([NOSE])).toBeCloseTo(farPole([{ ...NOSE, strength: 0 }]), 9);
+  });
+
+  it('digs a hollow when the strength is negative', () => {
+    const dented = sculpted([{ ...NOSE, strength: -0.3 }]);
+    let front = -Infinity;
+    for (const vertex of dented.mesh.vertices) {
+      if (Math.hypot(vertex.position.x, vertex.position.y) > 0.2) continue;
+      front = Math.max(front, vertex.position.z);
+    }
+    expect(front).toBeLessThan(0.95);
+  });
+
+  it('does not depend on the order the brushes are listed in', () => {
+    const second = { ...NOSE, note: 'A second swell, overlapping the first.', at: [0.3, 0, 0.95], strength: 0.15 };
+    const forward = sculpted([NOSE, second]);
+    const backward = sculpted([second, NOSE]);
+
+    for (let i = 0; i < forward.mesh.vertices.length; i += 1) {
+      const a = (forward.mesh.vertices[i] as { position: { x: number; y: number; z: number } }).position;
+      const b = (backward.mesh.vertices[i] as { position: { x: number; y: number; z: number } }).position;
+      expect(a.z).toBeCloseTo(b.z, 9);
+    }
+  });
+});

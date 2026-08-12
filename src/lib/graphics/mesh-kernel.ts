@@ -835,6 +835,104 @@ export function projectCylindricalUvs(mesh: PolyMesh, repeatY = 1): void {
 }
 
 /** Triplanar-style box projection: no seams to author, good for hard surfaces. */
+export interface SculptBrush {
+  /** Centre of influence. */
+  readonly at: Vec3;
+  /** Ellipsoidal reach. A nose ridge is long in Y, narrow in X, shallow in Z. */
+  readonly radii: Vec3;
+  /** Metres of displacement at the centre. Negative digs in. */
+  readonly strength: number;
+  /**
+   * smooth  a rounded swell — cheeks, brows, lips, the ball of a nose
+   * sharp   a crease that falls off fast — a nostril wing, a lid line
+   * flat    a plateau with rolled edges — a forehead plane, a jaw side
+   */
+  readonly falloff?: 'smooth' | 'sharp' | 'flat';
+  /** Push direction. Along the surface normal when omitted. */
+  readonly direction?: Vec3;
+}
+
+/**
+ * Sculpts a surface by displacing it, the way a modeller actually works.
+ *
+ * This exists because the alternative has a hard ceiling. Building a face by
+ * unioning a tube for the nose, two tubes for the lips and a sphere for each eye
+ * onto an egg produces exactly what it sounds like: parts stuck on a blob. Every
+ * junction is a boolean seam, every seam is a crease the light catches, and no
+ * amount of occlusion, texture or normal work gets past it, because the eye is
+ * reading the assembly and not the surface.
+ *
+ * A real face is one continuous surface in which the nose, the brow and the lips
+ * are *modulations* of that surface. That is what this does: each brush pushes
+ * the existing surface out or in over an ellipsoidal region, so the nose is a
+ * swell of the same skin as the cheek and there is no join to hide, because
+ * nothing was joined.
+ *
+ * Every brush is evaluated against the *original* positions and the sum applied
+ * once. Applying them one at a time would make the result depend on their order
+ * and let a later brush ride on the displacement of an earlier one.
+ */
+export function sculpt(mesh: PolyMesh, brushes: readonly SculptBrush[]): PolyMesh {
+  const out = mesh.clone();
+  if (brushes.length === 0 || out.vertices.length === 0) return out;
+
+  // Area-weighted vertex normals: the direction a brush pushes along when it
+  // does not name one, so a swell grows outward from the form rather than in
+  // some fixed world direction.
+  const normals: Vec3[] = out.vertices.map(() => v3());
+  for (const face of out.faces) {
+    const normal = faceNormal(out, face);
+    const area = faceArea(out, face);
+    for (const index of face.vertices) {
+      normals[index] = add(normals[index] as Vec3, scale(normal, area));
+    }
+  }
+  for (let i = 0; i < normals.length; i += 1) {
+    const normal = normals[i] as Vec3;
+    normals[i] = length(normal) > 1e-12 ? normalize(normal) : v3(0, 1, 0);
+  }
+
+  const original = out.vertices.map((vertex) => vertex.position);
+  const displacement: Vec3[] = out.vertices.map(() => v3());
+
+  for (const brush of brushes) {
+    const rx = Math.max(1e-6, Math.abs(brush.radii.x));
+    const ry = Math.max(1e-6, Math.abs(brush.radii.y));
+    const rz = Math.max(1e-6, Math.abs(brush.radii.z));
+    const falloff = brush.falloff ?? 'smooth';
+
+    for (let i = 0; i < original.length; i += 1) {
+      const p = original[i] as Vec3;
+      const dx = (p.x - brush.at.x) / rx;
+      const dy = (p.y - brush.at.y) / ry;
+      const dz = (p.z - brush.at.z) / rz;
+      const t = Math.hypot(dx, dy, dz);
+      if (t >= 1) continue;
+
+      let weight: number;
+      if (falloff === 'sharp') {
+        weight = (1 - t) * (1 - t);
+      } else if (falloff === 'flat') {
+        // Nearly constant across the middle, rolling off only at the rim.
+        weight = 1 - t ** 6;
+      } else {
+        // Smoothstep squared: zero value *and* zero gradient at the rim, which
+        // is what stops a brush leaving a visible ring at its own edge.
+        const s = 1 - t * t;
+        weight = s * s * s;
+      }
+
+      const direction = brush.direction ?? (normals[i] as Vec3);
+      displacement[i] = add(displacement[i] as Vec3, scale(direction, brush.strength * weight));
+    }
+  }
+
+  out.vertices.forEach((vertex, index) => {
+    vertex.position = add(vertex.position, displacement[index] as Vec3);
+  });
+  return out;
+}
+
 export function projectBoxUvs(mesh: PolyMesh, scaleFactor = 1): void {
   for (const vertex of mesh.vertices) {
     const { x, y, z } = vertex.position;

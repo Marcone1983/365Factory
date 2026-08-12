@@ -6,6 +6,7 @@ import {
   revolve,
   roundedRectProfile,
   relax,
+  sculpt,
   subdivide,
   superellipseProfile,
   triangulate,
@@ -310,6 +311,23 @@ function runStep(step: RecipeStep, parts: Map<string, PolyMesh>, slotOf: (id: st
       }
       if (apply.translate) source.translate(toVec(apply.translate));
       return source;
+    }
+
+    case 'sculpt': {
+      const source = requireMesh(parts, step.source, step.id);
+      // Refined first: a brush moves vertices, and a coarse cage has none where
+      // the detail is wanted.
+      const refined = subdivide(source, step.refine);
+      return sculpt(
+        refined,
+        step.brushes.map((brush) => ({
+          at: toVec(brush.at),
+          radii: toVec(brush.radii),
+          strength: brush.strength,
+          falloff: brush.falloff,
+          ...(brush.direction ? { direction: toVec(brush.direction) } : {}),
+        })),
+      );
     }
 
     case 'mirror':

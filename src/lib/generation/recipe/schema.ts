@@ -236,6 +236,40 @@ const StepSchema = z.discriminatedUnion('op', [
     apply: TransformSchema,
   }),
   z.object({
+    /**
+     * Sculpts an existing part by displacing its surface.
+     *
+     * This is how an organic form is built. Adding a tube for a nose and a
+     * sphere for an eye onto a smooth head produces parts stuck on a blob, with
+     * a boolean seam at every junction; a face is one continuous surface in
+     * which those forms are swellings and hollows of the same skin. `refine`
+     * subdivides the source first, because a brush can only move vertices that
+     * are there — sculpting a ten-segment loft moves ten points and produces a
+     * polygon, not a nose.
+     */
+    op: z.literal('sculpt'),
+    id: z.string().min(1).max(64),
+    note: noteField,
+    source: z.string().min(1).max(64),
+    refine: z.number().int().min(0).max(3).default(1),
+    brushes: z
+      .array(
+        z.object({
+          note: z.string().min(4).max(240),
+          at: Vec3Schema,
+          /** Ellipsoidal reach: a nose ridge is long in Y, narrow in X. */
+          radii: Vec3Schema,
+          /** Metres at the centre. Negative digs a hollow. */
+          strength: finite(-5, 5),
+          falloff: z.enum(['smooth', 'sharp', 'flat']).default('smooth'),
+          /** Push direction; along the surface normal when omitted. */
+          direction: Vec3Schema.optional(),
+        }),
+      )
+      .min(1)
+      .max(64),
+  }),
+  z.object({
     op: z.literal('mirror'),
     id: z.string().min(1).max(64),
     note: noteField,
