@@ -20,6 +20,7 @@ import path from 'node:path';
 import { config } from '../src/lib/config/env';
 import { generateReviewedAsset } from '../src/lib/generation/review/loop';
 import { recipeLibraryStats } from '../src/lib/knowledge/recipe-library';
+import { AssetRecipeSchema } from '../src/lib/generation/recipe/schema';
 import { recipeExamplePrompt, recipeSystemPrompt } from '../src/lib/generation/recipe/prompt';
 import { tokenCost } from '../src/lib/providers/pricing';
 import { db } from '../src/lib/db/client';
@@ -39,6 +40,8 @@ const seed = Number(flag('seed') ?? 4242);
 const palette = (flag('palette') ?? '#8c1230,#101418,#c9d1de,#f0a500,#8892a0,#555a63,#17171b').split(',');
 /** Hard ceiling for this run, in dollars. Refuses to start rather than overrunning. */
 const maxUsd = Number(flag('max-usd') ?? 1.5);
+/** An existing recipe to repair, instead of paying to author a new one. */
+const from = flag('from');
 
 /**
  * What this run will cost, before a penny is spent.
@@ -59,7 +62,9 @@ function estimate(rounds: number): { usd: number; perRound: number; promptTokens
   // The critic reads six renders; an image of this size runs about 1,500 tokens.
   const review = tokenCost(cfg.ANTHROPIC_MODEL_BALANCED, 9000 + 4000, 2500).costUsd;
   const perRound = author + review;
-  return { usd: perRound * (rounds + 1), perRound, promptTokens };
+  // Starting from an existing recipe skips the first authoring call.
+  const authorRounds = from ? rounds : rounds + 1;
+  return { usd: author * authorRounds + review * (rounds + 1), perRound, promptTokens };
 }
 
 function spentToday(): number {
@@ -112,6 +117,7 @@ async function main(): Promise<void> {
     seed,
     category,
     maxRepairs: rounds,
+    ...(from ? { initialRecipe: AssetRecipeSchema.parse(JSON.parse(fs.readFileSync(from, 'utf8'))) } : {}),
   });
 
   for (const attempt of result.attempts) {

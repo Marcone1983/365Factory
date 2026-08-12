@@ -53,6 +53,15 @@ export interface AssetLoopOptions {
   readonly category?: string;
   /** Set false to force a fresh authoring even if the library already answers this. */
   readonly reuse?: boolean;
+  /**
+   * A recipe to start from instead of authoring one.
+   *
+   * Repairing an asset that already exists should not pay to invent it again.
+   * The first round then builds and reviews this recipe as written, and every
+   * round after it repairs against what the critic saw — which is the whole
+   * loop, minus the one step that had already been bought.
+   */
+  readonly initialRecipe?: AssetRecipe;
   readonly signal?: AbortSignal;
   readonly context?: { projectId?: string; factoryRunId?: string };
 }
@@ -95,6 +104,18 @@ async function authorRecipe(
   options: AssetLoopOptions,
   history: Array<{ role: 'user' | 'assistant'; content: string }>,
 ): Promise<{ recipe: AssetRecipe; asset: BuiltAsset }> {
+  // A supplied recipe is used as the first round's answer rather than paid for
+  // again. It is still built here, so a recipe that no longer interprets fails
+  // in the same place and with the same diagnostic as one just written.
+  if (options.initialRecipe && history.length === 0) {
+    const asset = buildAssetFromRecipe(options.initialRecipe, {
+      palette: options.palette,
+      ...(options.seed !== undefined ? { seed: options.seed } : {}),
+      ...(options.textureSize !== undefined ? { textureSize: options.textureSize } : {}),
+    });
+    return { recipe: options.initialRecipe, asset };
+  }
+
   const maxBuildRetries = 3;
   let lastError = '';
 
