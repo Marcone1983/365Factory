@@ -606,12 +606,30 @@ export function ellipseProfile(radiusX: number, radiusY: number, segments = 16):
   });
 }
 
-/** Revolves a profile about the Y axis — bottles, wheels, domes, columns. */
+/**
+ * Revolves a profile about the Y axis — bottles, wheels, domes, columns.
+ *
+ * A profile point on the axis is a *pole*: the ring it would sweep has zero
+ * radius, so every segment meets at one point. It gets one vertex shared by
+ * every ring, and the faces that reach it are triangles.
+ *
+ * Emitting a full ring of coincident vertices there instead — which is what
+ * this did — is not a cosmetic waste. It leaves the surface unwelded at the
+ * pole, so the solid is not closed: the dished wheel rim in this project's own
+ * supercar came out as a torn bowl, and subtracting the spoke gaps from it
+ * shattered the result into floating panels, because a BSP asked to classify a
+ * point against an open surface has no answer. Every dome, finial, vase and
+ * bottle the revolve operator advertises has the same shape of defect.
+ */
 export function revolve(profile: ReadonlyArray<{ x: number; y: number }>, segments: number, sweep = Math.PI * 2, material = 0): PolyMesh {
   const mesh = new PolyMesh();
   const closed = Math.abs(sweep - Math.PI * 2) < 1e-6;
   const rings: number[][] = [];
   const ringCount = closed ? segments : segments + 1;
+
+  const onAxis = profile.map((point) => Math.abs(point.x) < 1e-9);
+  /** One shared vertex per pole, created on the first ring and reused after. */
+  const poles = new Map<number, number>();
 
   for (let s = 0; s < ringCount; s += 1) {
     const angle = (s / segments) * sweep;
@@ -619,6 +637,17 @@ export function revolve(profile: ReadonlyArray<{ x: number; y: number }>, segmen
     const sin = Math.sin(angle);
     const ring: number[] = [];
     profile.forEach((point, i) => {
+      if (onAxis[i]) {
+        const existing = poles.get(i);
+        if (existing !== undefined) {
+          ring.push(existing);
+          return;
+        }
+        const pole = mesh.addVertex(v3(0, point.y, 0), { u: 0.5, v: i / Math.max(1, profile.length - 1) });
+        poles.set(i, pole);
+        ring.push(pole);
+        return;
+      }
       ring.push(mesh.addVertex(v3(point.x * cos, point.y, point.x * sin), { u: s / segments, v: i / Math.max(1, profile.length - 1) }));
     });
     rings.push(ring);
@@ -628,6 +657,18 @@ export function revolve(profile: ReadonlyArray<{ x: number; y: number }>, segmen
     const a = rings[s] as number[];
     const b = rings[(s + 1) % ringCount] as number[];
     for (let i = 0; i + 1 < profile.length; i += 1) {
+      const startPole = onAxis[i];
+      const endPole = onAxis[i + 1];
+      // A segment from the axis to the axis sweeps no surface at all.
+      if (startPole && endPole) continue;
+      if (startPole) {
+        mesh.addFace([a[i] as number, b[i + 1] as number, a[i + 1] as number], material);
+        continue;
+      }
+      if (endPole) {
+        mesh.addFace([a[i] as number, b[i] as number, a[i + 1] as number], material);
+        continue;
+      }
       mesh.addFace([a[i] as number, b[i] as number, b[i + 1] as number, a[i + 1] as number], material);
     }
   }

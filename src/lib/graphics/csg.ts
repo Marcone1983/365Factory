@@ -470,27 +470,113 @@ export function csg(a: PolyMesh, b: PolyMesh, operation: BooleanOperation): Poly
   const farA: Polygon[] = [];
   for (const polygon of polygonsA) (polygonTouches(polygon, boundsB) ? nearA : farA).push(polygon);
 
-  const nearB: Polygon[] = [];
-  const farB: Polygon[] = [];
-  for (const polygon of polygonsB) (polygonTouches(polygon, boundsA) ? nearB : farB).push(polygon);
+  // The tool is never culled.
+  //
+  // Culling it looked like the same argument as culling the base and is not.
+  // The base's far polygons leave the algorithm entirely and are appended to
+  // the result unchanged, so nothing ever asks a question about them. The
+  // tool's polygons go *through* the trees — clipped, inverted, clipped again,
+  // and inserted into the base — and that dance is what removes coplanar
+  // duplicates. It needs the tool to be a closed surface. Measured on this
+  // project's wheel: culling the tool cost forty-four faces of the hole walls
+  // and left seventy-one open edges, which renders as shards. Tools are boxes
+  // and cylinders; keeping them whole costs nothing worth having.
+  const nearB = polygonsB;
 
-  // One operand's surface entirely outside the other's box means one solid may
-  // be wholly contained in the other — a case the culling reasoning above does
-  // not cover, because the containing solid's *surface* is far from the
-  // contained one while its *volume* is not. The full BSP decides it.
-  // One operand's surface entirely outside the other's box means one solid may
-  // be wholly contained in the other — a case the culling reasoning above does
-  // not cover, because the containing solid's *surface* is far from the
-  // contained one while its *volume* is not. The full BSP decides it.
-  if (nearA.length === 0 || nearB.length === 0) {
+  // The base's surface entirely outside the tool's box means one solid may be
+  // wholly contained in the other — a case the culling reasoning above does not
+  // cover, because the containing solid's *surface* is far from the contained
+  // one while its *volume* is not. The full BSP decides it.
+  if (nearA.length === 0) {
     return fromPolygons(csgExact(polygonsA, polygonsB, operation));
   }
 
-  const kept = csgExact(nearA, nearB, operation);
-  if (operation === 'union') kept.push(...farA, ...farB);
+  const kept = csgCulled(polygonsA, polygonsB, nearA, nearB, operation);
+  if (operation === 'union') kept.push(...farA);
   else if (operation === 'subtract') kept.push(...farA);
 
   return fromPolygons(kept);
+}
+
+/**
+ * The boolean, run so that only the polygons near the other solid are split,
+ * without letting that shortcut change any answer.
+ *
+ * Culling has two halves and only one of them is safe on its own. Keeping a
+ * polygon whole because its bounding box misses the other solid's is sound: it
+ * cannot intersect that solid, so it is entirely outside it. Deciding a
+ * polygon's fate against a tree built from *part* of the other solid is not,
+ * and that is what this used to do — a partial surface is not closed, and a BSP
+ * asked whether a point is inside an open surface answers whatever the missing
+ * faces would have contradicted.
+ *
+ * The result was geometry that looked plausible and was torn: this project's
+ * own wheel rim came back from a five-cutter subtraction with seventy-one open
+ * edges, which renders as chrome shards floating where the spokes should be.
+ *
+ * So each operand gets two trees. The *classifier* is built from all of it and
+ * is the only thing ever used to decide what is inside what. The *work* tree
+ * holds the polygons near the other solid, and is what the output is read back
+ * from — so the far polygons still never enter the split, and the face count
+ * stays where the culling put it. Inversions are applied to both trees of an
+ * operand together, because the algorithm clips against a solid that has been
+ * turned inside out at those points and a classifier that missed the flip would
+ * answer every question backwards.
+ */
+function csgCulled(
+  polygonsA: readonly Polygon[],
+  polygonsB: readonly Polygon[],
+  nearA: readonly Polygon[],
+  nearB: readonly Polygon[],
+  operation: BooleanOperation,
+): Polygon[] {
+  const classifierA = new Node([...polygonsA]);
+  const classifierB = new Node([...polygonsB]);
+  const workA = new Node([...nearA]);
+  const workB = new Node([...nearB]);
+
+  const invertA = (): void => {
+    workA.invert();
+    classifierA.invert();
+  };
+  const invertB = (): void => {
+    workB.invert();
+    classifierB.invert();
+  };
+
+  switch (operation) {
+    case 'union':
+      workA.clipTo(classifierB);
+      workB.clipTo(classifierA);
+      invertB();
+      workB.clipTo(classifierA);
+      invertB();
+      workA.build(workB.allPolygons());
+      break;
+
+    case 'subtract':
+      invertA();
+      workA.clipTo(classifierB);
+      workB.clipTo(classifierA);
+      invertB();
+      workB.clipTo(classifierA);
+      invertB();
+      workA.build(workB.allPolygons());
+      workA.invert();
+      break;
+
+    case 'intersect':
+      invertA();
+      workB.clipTo(classifierA);
+      invertB();
+      workA.clipTo(classifierB);
+      workB.clipTo(classifierA);
+      workA.build(workB.allPolygons());
+      workA.invert();
+      break;
+  }
+
+  return workA.allPolygons();
 }
 
 function csgExact(polygonsA: readonly Polygon[], polygonsB: readonly Polygon[], operation: BooleanOperation): Polygon[] {

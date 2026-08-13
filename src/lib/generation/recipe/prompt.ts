@@ -81,6 +81,9 @@ failed.
   loft       id, note, sections, material         (+ closeRing, capStart, capEnd)
   primitive  id, note, shape, material            (+ centre, size, radius, segments)
   array      id, note, source, kind, count        (+ step | axis+radius+sweepDegrees | curve)
+             radius on a radial array moves the source OUTWARD FROM WHERE IT
+             ALREADY IS before each copy is turned. A part already modelled off
+             the axis needs radius 0, or it ends up at twice the distance.
   boolean    id, note, mode, base, tools          — mode is union | subtract | intersect
                                                     base is one part id, tools is an array of ids
   deform     id, note, source, kind               (+ axis, about, amount, exponent, frequency)
